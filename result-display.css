@@ -1,0 +1,446 @@
+/* Generic selectors to avoid detection - ALL PROPERTIES USE !IMPORTANT */
+.sg-panel {
+  position: fixed !important;
+  top: 20px !important;
+  right: 20px !important;
+  left: auto !important;
+  transform: translateX(100%) !important;
+  width: 400px !important;
+  max-width: calc(100vw - 40px) !important;
+  max-height: calc(100vh - 40px) !important;
+  background: rgba(22, 33, 62, 0.98) !important;
+  border: 1px solid rgba(139, 92, 246, 0.4) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6) !important;
+  z-index: 2147483647 !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif !important;
+  color: #e4e4e7 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  visibility: visible !important;
+}
+
+.sg-panel.sg-visible {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateX(0) !important;
+}
+
+.sg-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 20px 24px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+  border-radius: 20px 20px 0 0 !important;
+}
+
+.sg-title {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+}
+
+.sg-title svg {
+  width: 24px !important;
+  height: 24px !important;
+  color: #8b5cf6 !important;
+}
+
+.sg-actions {
+  display: flex !important;
+  gap: 12px !important;
+}
+
+.sg-close,
+.sg-copy {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #a1a1aa !important;
+  cursor: pointer !important;
+  padding: 0 !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 8px !important;
+  transition: all 0.2s ease !important;
+}
+
+.sg-close {
+  font-size: 20px !important;
+}
+
+.sg-close:hover {
+  background: rgba(239, 68, 68, 0.2) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  color: #f87171 !important;
+}
+
+.sg-copy:hover {
+  background: rgba(139, 92, 246, 0.2) !important;
+  border-color: rgba(139, 92, 246, 0.3) !important;
+  color: #c4b5fd !important;
+}
+
+.sg-copy svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+.sg-content {
+  padding: 20px !important;
+  overflow-y: auto !important;
+  max-height: calc(100vh - 200px) !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  word-break: break-word !important;
+  flex: 1 !important;
+  min-height: 0 !important;
+}
+
+.sg-content h2 {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  color: #facc15 !important;
+  margin-bottom: 12px !important;
+  padding-bottom: 8px !important;
+  border-bottom: 2px solid rgba(250, 204, 21, 0.3) !important;
+}
+
+.sg-content h2:not(:first-child) {
+  margin-top: 24px !important;
+}
+
+/* Background overlay - minimal, allows page interaction */
+.sg-backdrop {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  background: transparent !important;
+  z-index: 2147483646 !important;
+  opacity: 0 !important;
+  transition: opacity 0.3s ease !important;
+  pointer-events: none !important;
+  visibility: visible !important;
+  display: block !important;
+}
+
+.sg-backdrop.sg-visible {
+  opacity: 1 !important;
+  /* Backdrop stays transparent - no blocking click events */
+  pointer-events: none !important;
+}
+
+.sg-content .screengrab-error {
+  color: #f87171 !important;
+  background: rgba(248, 113, 113, 0.1) !important;
+  padding: 12px !important;
+  border-radius: 8px !important;
+  font-size: 13px !important;
+}
+
+.sg-content::-webkit-scrollbar {
+  width: 6px !important;
+}
+
+.sg-content::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-radius: 3px !important;
+}
+
+.sg-content::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.3) !important;
+  border-radius: 3px !important;
+}
+
+.sg-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.5) !important;
+}
+
+/* Markdown table styles */
+.sg-content table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin: 16px 0 !important;
+  font-size: 13px !important;
+}
+
+.sg-content th,
+.sg-content td {
+  border: 1px solid rgba(139, 92, 246, 0.2) !important;
+  padding: 10px 12px !important;
+  text-align: left !important;
+  vertical-align: top !important;
+}
+
+.sg-content th {
+  background: rgba(250, 204, 21, 0.1) !important;
+  font-weight: 600 !important;
+  color: #facc15 !important;
+}
+
+.sg-content tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02) !important;
+}
+
+.sg-content tr:hover {
+  background: rgba(139, 92, 246, 0.05) !important;
+}
+
+/* Markdown list styles */
+.sg-content ul,
+.sg-content ol {
+  margin: 12px 0 !important;
+  padding-left: 24px !important;
+}
+
+.sg-content li {
+  margin: 6px 0 !important;
+  line-height: 1.6 !important;
+}
+
+/* Markdown code styles */
+.sg-content code {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgba(139, 92, 246, 0.2) !important;
+  border-radius: 4px !important;
+  padding: 2px 6px !important;
+  font-size: 13px !important;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
+  color: #c4b5fd !important;
+}
+
+.sg-content pre {
+  background: rgba(0, 0, 0, 0.4) !important;
+  border: 1px solid rgba(139, 92, 246, 0.3) !important;
+  border-radius: 8px !important;
+  padding: 16px !important;
+  margin: 16px 0 !important;
+  overflow-x: auto !important;
+}
+
+.sg-content pre code {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  color: #e4e4e7 !important;
+}
+
+/* Markdown headers within content */
+.sg-content h3,
+.sg-content h4,
+.sg-content h5,
+.sg-content h6 {
+  color: #facc15 !important;
+  margin: 20px 0 12px 0 !important;
+  font-weight: 600 !important;
+}
+
+.sg-content h3 {
+  font-size: 15px !important;
+}
+
+.sg-content h4 {
+  font-size: 14px !important;
+}
+
+.sg-content h5,
+.sg-content h6 {
+  font-size: 13px !important;
+}
+
+/* Horizontal rule */
+.sg-content hr {
+  border: none !important;
+  border-top: 1px solid rgba(139, 92, 246, 0.2) !important;
+  margin: 20px 0 !important;
+}
+
+/* Bold and italic */
+.sg-content strong {
+  font-weight: 600 !important;
+  color: #fff !important;
+}
+
+.sg-content em {
+  font-style: italic !important;
+  color: #d4d4d8 !important;
+}
+
+/* Follow-up section */
+.sg-followup {
+  padding: 16px 24px 20px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+  border-radius: 0 0 20px 20px !important;
+}
+
+.followup-input-wrapper {
+  display: flex !important;
+  gap: 8px !important;
+  align-items: center !important;
+}
+
+.sg-input {
+  flex: 1 !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 10px !important;
+  padding: 10px 14px !important;
+  color: #e4e4e7 !important;
+  font-size: 14px !important;
+  outline: none !important;
+  transition: all 0.2s ease !important;
+}
+
+.sg-input:focus {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(139, 92, 246, 0.4) !important;
+}
+
+.sg-input::placeholder {
+  color: #71717a !important;
+}
+
+.sg-input:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+}
+
+.sg-submit {
+  background: rgba(139, 92, 246, 0.2) !important;
+  border: 1px solid rgba(139, 92, 246, 0.3) !important;
+  color: #c4b5fd !important;
+  cursor: pointer !important;
+  padding: 10px !important;
+  border-radius: 10px !important;
+  transition: all 0.2s ease !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.sg-submit:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.3) !important;
+  border-color: rgba(139, 92, 246, 0.5) !important;
+  transform: scale(1.05) !important;
+}
+
+.sg-submit:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+}
+
+.sg-submit svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+.sg-submit .spinner {
+  animation: spin 1s linear infinite !important;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg) !important;
+  }
+
+  to {
+    transform: rotate(360deg) !important;
+  }
+}
+
+/* Chat messages */
+.screengrab-message {
+  margin-bottom: 16px !important;
+  padding: 12px 16px !important;
+  border-radius: 12px !important;
+  animation: messageSlideIn 0.3s ease-out !important;
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0 !important;
+    transform: translateY(10px) !important;
+  }
+
+  to {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+  }
+}
+
+.screengrab-message-user {
+  background: rgba(139, 92, 246, 0.15) !important;
+  border: 1px solid rgba(139, 92, 246, 0.3) !important;
+  margin-left: 20px !important;
+}
+
+.screengrab-message-assistant {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  margin-right: 20px !important;
+}
+
+.screengrab-message-label {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  margin-bottom: 6px !important;
+  color: #a78bfa !important;
+}
+
+.screengrab-message-user .screengrab-message-label {
+  color: #c4b5fd !important;
+}
+
+.screengrab-message-content {
+  line-height: 1.6 !important;
+  word-break: break-word !important;
+}
+
+/* Markdown styles within chat messages */
+.screengrab-message-content table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin: 12px 0 !important;
+  font-size: 13px !important;
+}
+
+.screengrab-message-content th,
+.screengrab-message-content td {
+  border: 1px solid rgba(139, 92, 246, 0.2) !important;
+  padding: 8px 10px !important;
+  text-align: left !important;
+  vertical-align: top !important;
+}
+
+.screengrab-message-content th {
+  background: rgba(139, 92, 246, 0.1) !important;
+  font-weight: 600 !important;
+  color: #c4b5fd !important;
+}
+
+.screengrab-message-content code {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgba(139, 92, 246, 0.2) !important;
+  border-radius: 3px !important;
+  padding: 2px 5px !important;
+  font-family: 'Consolas', 'Monaco', monospace !important;
+  font-size: 13px !important;
+  color: #c4b5fd !important;
+}

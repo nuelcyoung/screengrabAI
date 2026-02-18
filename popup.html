@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 340px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #e4e4e7;
+      padding: 20px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .header svg {
+      width: 28px;
+      height: 28px;
+      color: #8b5cf6;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .capture-modes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .mode-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 2px solid transparent;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      color: #a1a1aa;
+    }
+
+    .mode-btn:hover {
+      background: rgba(139, 92, 246, 0.1);
+      border-color: rgba(139, 92, 246, 0.3);
+      color: #c4b5fd;
+    }
+
+    .mode-btn.active {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: #8b5cf6;
+      color: #fff;
+    }
+
+    .mode-btn svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .mode-btn span {
+      font-size: 11px;
+      font-weight: 500;
+      text-align: center;
+    }
+
+    #capture {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    #capture:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+    }
+
+    #capture:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #capture svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    #loading {
+      display: none !important;
+      margin-top: 16px;
+      padding: 20px;
+      min-height: 140px !important;
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(59, 130, 246, 0.1) 100%) !important;
+      border: 2px solid rgba(139, 92, 246, 0.4) !important;
+      border-radius: 12px;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #loading.visible {
+      display: flex !important;
+    }
+
+    .loading-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      justify-content: center;
+    }
+
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid rgba(139, 92, 246, 0.2);
+      border-top-color: #8b5cf6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    #loading-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .progress-container {
+      width: 100%;
+      height: 6px;
+      background: rgba(139, 92, 246, 0.2);
+      border-radius: 3px;
+      overflow: hidden;
+      margin: 4px 0;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #8b5cf6 0%, #a78bfa 100%);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+      box-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+    }
+
+    .steps-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .step-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(139, 92, 246, 0.3);
+      transition: all 0.3s ease;
+    }
+
+    .step-dot.active {
+      background: #8b5cf6;
+      box-shadow: 0 0 8px rgba(139, 92, 246, 0.6);
+      transform: scale(1.2);
+    }
+
+    .step-dot.completed {
+      background: #22c55e;
+    }
+
+    .step-line {
+      width: 20px;
+      height: 2px;
+      background: rgba(139, 92, 246, 0.3);
+      transition: all 0.3s ease;
+    }
+
+    .step-line.completed {
+      background: #22c55e;
+    }
+
+    #loading-step {
+      font-size: 12px;
+      color: #a78bfa;
+      text-align: center;
+      min-height: 18px;
+    }
+
+    #loading-stats {
+      font-size: 11px;
+      color: #8b5cf6;
+      text-align: center;
+      min-height: 16px;
+    }
+
+    .cancel-btn {
+      margin-top: 8px;
+      padding: 6px 16px;
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s ease;
+    }
+
+    .cancel-btn:hover {
+      background: rgba(239, 68, 68, 0.3);
+      border-color: rgba(239, 68, 68, 0.6);
+    }
+
+    #result {
+      margin-top: 16px;
+      max-height: 300px;
+      overflow-y: auto;
+      display: none;
+    }
+
+    #result.visible {
+      display: block;
+    }
+
+    #result-content {
+      padding: 16px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+
+    #result-content h2 {
+      font-size: 14px;
+      color: #c4b5fd;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+    }
+
+    #result-content h2:not(:first-child) {
+      margin-top: 16px;
+    }
+
+    /* Markdown table styles */
+    #result-content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 12px;
+    }
+
+    #result-content th,
+    #result-content td {
+      border: 1px solid rgba(139, 92, 246, 0.2);
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    #result-content th {
+      background: rgba(139, 92, 246, 0.1);
+      font-weight: 600;
+      color: #c4b5fd;
+    }
+
+    #result-content tr:nth-child(even) {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    /* Markdown list styles */
+    #result-content ul,
+    #result-content ol {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+
+    #result-content li {
+      margin: 4px 0;
+      line-height: 1.5;
+    }
+
+    /* Markdown code styles */
+    #result-content code {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(139, 92, 246, 0.2);
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-size: 12px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      color: #c4b5fd;
+    }
+
+    #result-content pre {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 6px;
+      padding: 12px;
+      margin: 12px 0;
+      overflow-x: auto;
+      font-size: 12px;
+    }
+
+    #result-content pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      color: #e4e4e7;
+    }
+
+    /* Markdown headers within content */
+    #result-content h3,
+    #result-content h4,
+    #result-content h5,
+    #result-content h6 {
+      color: #a78bfa;
+      margin: 16px 0 10px 0;
+      font-weight: 600;
+    }
+
+    #result-content h3 {
+      font-size: 14px;
+    }
+
+    #result-content h4 {
+      font-size: 13px;
+    }
+
+    #result-content h5,
+    #result-content h6 {
+      font-size: 12px;
+    }
+
+    /* Horizontal rule */
+    #result-content hr {
+      border: none;
+      border-top: 1px solid rgba(139, 92, 246, 0.2);
+      margin: 16px 0;
+    }
+
+    /* Bold and italic */
+    #result-content strong {
+      font-weight: 600;
+      color: #fff;
+    }
+
+    #result-content em {
+      font-style: italic;
+      color: #d4d4d8;
+    }
+
+    .error {
+      color: #f87171;
+      background: rgba(248, 113, 113, 0.1);
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(139, 92, 246, 0.3);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(139, 92, 246, 0.5);
+    }
+
+    .settings-btn {
+      width: 100%;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      color: #a1a1aa;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .settings-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #c4b5fd;
+    }
+
+    .settings-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .settings-modal.visible {
+      display: flex;
+    }
+
+    .settings-content {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      padding: 24px;
+      border-radius: 16px;
+      width: 300px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .settings-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .settings-header h2 {
+      font-size: 18px;
+      color: #fff;
+    }
+
+    .close-btn {
+      background: none;
+      border: none;
+      color: #a1a1aa;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .close-btn:hover {
+      color: #fff;
+    }
+
+    .setting-group {
+      margin-bottom: 20px;
+    }
+
+    .setting-label {
+      display: block;
+      font-size: 12px;
+      color: #a1a1aa;
+      margin-bottom: 8px;
+    }
+
+    .setting-select,
+    .setting-input {
+      width: 100%;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      color: #e4e4e7;
+      font-size: 13px;
+    }
+
+    .setting-select:focus,
+    .setting-input:focus {
+      outline: none;
+      border-color: #8b5cf6;
+    }
+
+    /* Ensure dropdown options are readable */
+    .setting-select option {
+      background: #1a1a2e;
+      color: #e4e4e7;
+      padding: 8px;
+    }
+
+    .setting-select optgroup {
+      background: #1a1a2e;
+      color: #a1a1aa;
+      font-weight: 600;
+    }
+
+    .setting-hint {
+      font-size: 11px;
+      color: #71717a;
+      margin-top: 6px;
+    }
+
+    .save-btn {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .save-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+    }
+
+    .save-btn.small {
+      padding: 8px 16px;
+      font-size: 12px;
+      width: auto;
+      min-width: 80px;
+    }
+
+    .save-btn.saved {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .api-key-section {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .api-key-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .api-key-header svg {
+      width: 18px;
+      height: 18px;
+      color: #8b5cf6;
+    }
+
+    .api-key-header h3 {
+      font-size: 14px;
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .api-key-status {
+      margin-left: auto;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #71717a;
+    }
+
+    .api-key-status.saved {
+      background: rgba(16, 185, 129, 0.2);
+      color: #10b981;
+    }
+
+    .api-key-input-group {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .api-key-input-group .setting-input {
+      flex: 1;
+    }
+
+    .settings-section {
+      margin-bottom: 20px;
+    }
+
+    .settings-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #71717a;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .modal-footer {
+      position: sticky;
+      bottom: 0;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      padding-top: 16px;
+      margin-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .save-indicator {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #10b981;
+      margin-bottom: 10px;
+    }
+
+    .save-indicator.visible {
+      display: flex;
+    }
+
+    .save-indicator svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .cancel-btn {
+      margin-top: 12px;
+      padding: 8px 16px;
+      background: rgba(248, 113, 113, 0.2);
+      border: 1px solid rgba(248, 113, 113, 0.4);
+      border-radius: 6px;
+      color: #f87171;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .cancel-btn:hover {
+      background: rgba(248, 113, 113, 0.3);
+      border-color: #f87171;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="M21 15l-5-5L5 21" />
+    </svg>
+    <h1>ScreenGrab AI</h1>
+  </div>
+
+  <div class="capture-modes">
+    <button class="mode-btn active" data-mode="visible">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <line x1="8" y1="21" x2="16" y2="21" />
+        <line x1="12" y1="17" x2="12" y2="21" />
+      </svg>
+      <span>Visible</span>
+    </button>
+    <button class="mode-btn" data-mode="full">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="12" y1="18" x2="12" y2="12" />
+        <line x1="9" y1="15" x2="15" y2="15" />
+      </svg>
+      <span>Full Page</span>
+    </button>
+    <button class="mode-btn" data-mode="area">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M5 3h4M3 5v4M19 3h-4M21 5v4M5 21h4M3 19v-4M19 21h-4M21 19v-4" />
+      </svg>
+      <span>Select Area</span>
+    </button>
+  </div>
+
+  <button id="capture">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
+    Capture & Analyze
+  </button>
+
+  <div id="loading">
+    <div class="loading-header">
+      <div class="spinner"></div>
+      <div id="loading-text">Analyzing...</div>
+    </div>
+
+    <div class="progress-container">
+      <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+    </div>
+
+    <div class="steps-indicator">
+      <div class="step-dot" id="step-1"></div>
+      <div class="step-line" id="line-1"></div>
+      <div class="step-dot" id="step-2"></div>
+      <div class="step-line" id="line-2"></div>
+      <div class="step-dot" id="step-3"></div>
+    </div>
+
+    <div id="loading-step">Initializing...</div>
+    <div id="loading-stats"></div>
+
+    <button id="cancel-capture" class="cancel-btn">Cancel</button>
+  </div>
+
+  <div id="result">
+    <div id="result-content"></div>
+  </div>
+
+  <button id="settings-btn" class="settings-btn">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3" />
+      <path
+        d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
+    </svg>
+    Configure Settings
+  </button>
+
+  <script src="capture-queue.js"></script>
+  <script src="ai-service.js"></script>
+  <script src="popup.js"></script>
+</body>
+
+</html>

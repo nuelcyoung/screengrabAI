@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; padding: 0; }
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+  <script>
+    // Flag to indicate when the offscreen document is ready to receive messages
+    let isReady = false;
+
+    // Listen for messages from background script
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      try {
+        // Only process messages once the document is ready
+        if (!isReady && request.action !== 'initializeOffscreen') {
+          console.warn('Offscreen document not ready yet, ignoring message:', request.action);
+          sendResponse({ error: 'Offscreen document not ready' });
+          return false;
+        }
+
+        if (request.action === 'initializeOffscreen') {
+          // Initialize the offscreen document and respond that it's ready
+          isReady = true;
+          sendResponse({ success: true });
+          // Also send the offscreenReady message that background.js is waiting for
+          chrome.runtime.sendMessage({ action: 'offscreenReady' }).catch(() => {
+            // Ignore errors if background isn't listening
+          });
+          return false;
+        } else if (request.action === 'stitchImages') {
+          stitchImages(request).then(sendResponse).catch(error => {
+            console.error('stitchImages error in offscreen:', error);
+            sendResponse({ error: error.message });
+          });
+          return true;
+        } else if (request.action === 'cropImage') {
+          cropImage(request).then(sendResponse).catch(error => {
+            console.error('cropImage error in offscreen:', error);
+            sendResponse({ error: error.message });
+          });
+          return true;
+        } else if (request.action === 'resizeImage') {
+          resizeImage(request).then(sendResponse).catch(error => {
+            console.error('resizeImage error in offscreen:', error);
+            sendResponse({ error: error.message });
+          });
+          return true;
+        }
+        return false;
+      } catch (error) {
+        console.error('Offscreen message handler error:', error);
+        try {
+          sendResponse({ error: error.message });
+        } catch (e) {
+          console.error('Failed to send error response:', e);
+        }
+        return true;
+      }
+    });
+
+    // Stitch images together
+    async function stitchImages({ captures, width, totalHeight, viewportHeight }) {
+      try {
+        const canvas = new OffscreenCanvas(width, totalHeight);
+        const ctx = canvas.getContext('2d');
+
+        for (let i = 0; i < captures.length; i++) {
+          const { dataUrl, y } = captures[i];
+          const img = await createImageBitmap(await (await fetch(dataUrl)).blob());
+
+          const isLast = i === captures.length - 1;
+          const remainingHeight = totalHeight - y;
+
+          if (isLast && remainingHeight < viewportHeight) {
+            const sourceY = viewportHeight - remainingHeight;
+            ctx.drawImage(img, 0, sourceY, width, remainingHeight, 0, y, width, remainingHeight);
+          } else {
+            ctx.drawImage(img, 0, y);
+          }
+        }
+
+        const blob = await canvas.convertToBlob({ type: 'image/png' });
+        const dataUrl = await blobToDataUrl(blob);
+        return { dataUrl };
+      } catch (error) {
+        console.error('stitchImages internal error:', error);
+        throw error;
+      }
+    }
+
+    // Crop image to selection
+    async function cropImage({ dataUrl, selection, devicePixelRatio }) {
+      try {
+        const img = await createImageBitmap(await (await fetch(dataUrl)).blob());
+
+        const scale = devicePixelRatio;
+        const x = Math.round(selection.x * scale);
+        const y = Math.round(selection.y * scale);
+        const width = Math.round(selection.width * scale);
+        const height = Math.round(selection.height * scale);
+
+        const canvas = new OffscreenCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+
+        ctx.drawImage(img, x, y, width, height, 0, 0, width, height);
+
+        const blob = await canvas.convertToBlob({ type: 'image/png' });
+        const dataUrl = await blobToDataUrl(blob);
+        return { dataUrl };
+      } catch (error) {
+        console.error('cropImage internal error:', error);
+        throw error;
+      }
+    }
+
+    // Convert blob to data URL
+    function blobToDataUrl(blob) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    // Resize image if needed
+    async function resizeImage({ base64Image, maxSize }) {
+      try {
+        const img = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64Image}`)).blob());
+
+        const { width, height } = img;
+
+        // Check if resize needed
+        if (width <= maxSize && height <= maxSize) {
+          return { dataUrl: base64Image };
+        }
+
+        // Calculate new dimensions
+        const ratio = Math.min(maxSize / width, maxSize / height);
+        const newWidth = Math.round(width * ratio);
+        const newHeight = Math.round(height * ratio);
+
+        // Resize using OffscreenCanvas
+        const canvas = new OffscreenCanvas(newWidth, newHeight);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, newWidth, newHeight);
+
+        const blob = await canvas.convertToBlob({ type: 'image/png' });
+        const dataUrl = await blobToDataUrl(blob);
+
+        // Return base64 without data:image/png;base64, prefix
+        return { dataUrl: dataUrl.split(',')[1] };
+      } catch (error) {
+        console.error('resizeImage internal error:', error);
+        throw error;
+      }
+    }
+
+    // Signal that the offscreen document is ready after initialization
+    // Send ready message when we receive initializeOffscreen
+    // (handled in the message listener above)
+  </script>
+</body>
+</html>

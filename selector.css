@@ -1,0 +1,58 @@
+/* Generic selectors to avoid detection */
+.sg-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 2147483647;
+  cursor: crosshair;
+  transition: opacity 0.15s ease;
+  pointer-events: all !important;
+  /* Hide from common detection methods */
+  visibility: visible !important;
+  display: block !important;
+}
+
+.sg-selection-box {
+  position: fixed;
+  border: 2px solid #8b5cf6;
+  background: rgba(139, 92, 246, 0.1);
+  z-index: 2147483648;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  /* Hide from common detection methods */
+  visibility: visible !important;
+  display: block !important;
+}
+
+.sg-selection-box.sg-active {
+  opacity: 1;
+}
+
+.sg-instructions {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(26, 26, 46, 0.95);
+  color: #e4e4e7;
+  padding: 16px 24px;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 2147483649;
+  pointer-events: none;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  transition: opacity 0.15s ease;
+  text-align: center;
+  max-width: 400px;
+  /* Hide from common detection methods */
+  visibility: visible !important;
+  display: block !important;
+}
