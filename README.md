@@ -44,7 +44,7 @@ Capture screenshots, extract text with OCR, and get AI-powered insights—withou
 
 1. **Download or Clone this Repository**
    ```bash
-   git clone https://github.com/yourusername/screengrab.git
+   git clone https://github.com/nuelcyoung/screengrab.git
    cd screengrab
    ```
 
