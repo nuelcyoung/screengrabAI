@@ -17,33 +17,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.1.0] - 2025-02-18
+## [2.1.0] - 2026-03-14
 
-### Added
-- Three capture modes: visible tab, full page, and area selection
-- AI-powered OCR text extraction using vision models
-- Contextual AI analysis with follow-up questions
-- Local AI support via Ollama for offline, privacy-first operation
-- Cloud provider support: OpenAI, Anthropic, Google Gemini, Google Cloud Vision
-- Floating capture icon for quick access on any page
-- Progress indicator with real-time status updates
-- Markdown-formatted results with code blocks and tables
-- SSN pattern redaction for privacy
-- Settings page for API key and model configuration
-- Automatic page stitching for full-page captures
-- Rate limiting and retry logic for Chrome capture API
+### Fixed
+- **Area Selection:** Fixed double-click issue — area selection now works on first click
+- **Ollama Models:** Fixed model dropdown showing "No models found" — models now properly load for Ollama Local and Ollama Cloud
+- **Follow-up Questions:** Fixed markdown rendering in follow-up responses
 
-### Security
-- All API keys stored locally in `chrome.storage.local`
-- No telemetry, analytics, or tracking
-- No data sent to developer servers
-- Local Ollama mode operates completely offline
+### Improved
+- **Area Selection:** Added 400ms grace period after overlay appears to prevent accidental clicks from popup closure
+- **Architecture:** Storage-based capture queue for more reliable operation when browser suspends background processes
+- **Progress Indicator:** Floating progress indicator with real-time status updates (capturing → selecting → processing → analyzing → complete)
+- **User Feedback:** Clearer status messages during each capture phase
+
+### Changed
+- **Redirect Mode:** Updated description to clarify it "Opens the AI provider's website... Uses your own logged-in session"
+- **Provider Naming:** Standardized provider IDs (`ollama_local`, `ollama_cloud`) for consistency
 
 ### Technical
-- Built on Chrome Manifest V3
-- Service worker architecture with storage-based communication
-- Content scripts for capture UI (selector, progress indicator, floating icon)
-- Modular AI service layer supporting multiple providers
+- Fixed provider normalization in `getModels()` to handle legacy provider aliases
+- Fixed `categorizeModels()` await and property name (`multimodal` vs `visionModels`)
+- Removed redundant storage wipe in floating icon capture flow
+- Added 350ms delay before area selector instantiation to avoid phantom events
+
+---
+
+## [2.0.0] - 2026-03-01
+
+### Added
+- **Grok (xAI) Provider:** Full support for Grok-2 Vision and text analysis
+- **Redirect Mode:** Open screenshots directly in ChatGPT or Grok web interface
+- **Auto-paste:** Automatic clipboard paste for Redirect Mode
+- **In-page Results:** Result display panel with follow-up question support
+- **Floating Progress:** Real-time progress indicator during capture and analysis
+
+### Changed
+- **Provider Removed:** Anthropic (Claude) provider support removed
+- **Redirect Behavior:** Analysis result panel no longer shown when Redirect Mode is enabled
+- **Default Provider:** Redirect Mode now uses selected API provider instead of hardcoded OpenAI
+
+### Technical
+- Added `ai-service-multimodal.js` for unified multimodal analysis
+- Improved storage-based communication for follow-up questions
+- Enhanced rate limiting for full-page captures
 
 ---
 
@@ -70,38 +86,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 1.1.0 | 2025-02-18 | Full feature set with multiple AI providers |
+| 2.1.0 | 2026-03-14 | Bug fixes: area selection, Ollama models, markdown rendering |
+| 2.0.0 | 2026-03-01 | Grok provider, Redirect Mode, in-page results |
 | 1.0.0 | 2025-02-18 | Initial stable release |
-| 0.1.0 | TBD | Beta/Development phase |
 
 ---
 
 ## Upgrade Guide
 
-### From 1.0.0 to 1.1.0
+### From 2.0.0 to 2.1.0
 
 No breaking changes. Simply reload the extension:
 1. Go to `chrome://extensions/`
 2. Find "ScreenGrab AI"
 3. Click the reload icon 🔄
 
+Your settings and API keys are preserved automatically.
+
+### From 1.x.x to 2.x.x
+
+**Note:** Anthropic (Claude) provider was removed in v2.0.0. If you were using Claude:
+1. Export your settings first (Settings → Export)
+2. Edit the JSON file to change `"textApiProvider": "anthropic"` to `"textApiProvider": "ollama"` or another provider
+3. Re-import the modified settings
+
+All other settings and API keys are preserved automatically.
+
 ---
 
 ## Breaking Changes
 
-*None yet. This is the initial public release.*
+### Version 2.0.0
+- **Anthropic (Claude) provider removed** — If you were using Claude, you'll need to switch to another provider (Ollama, OpenAI, Grok, or Google Gemini)
+
+*No other breaking changes.*
 
 ---
 
 ## Migration Notes
 
-If you were using the development version:
-- Export your settings before upgrading (feature coming in v1.2.0)
-- API keys are preserved in local storage automatically
+### Upgrading to 2.1.0
+No migration needed. All settings and API keys are preserved automatically.
+
+### Upgrading to 2.0.0
+If you were using Anthropic (Claude):
+1. Export your settings before upgrading (Settings → Export)
+2. After upgrading, edit the exported JSON to change `"visionApiProvider"` and `"textApiProvider"` from `"anthropic"` to your new preferred provider
+3. Re-import the modified settings
+
+All other settings and API keys are preserved automatically.
 
 ---
 
-[Unreleased]: https://github.com/nuelcyoung/screengrabAI/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/nuelcyoung/screengrabAI/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/nuelcyoung/screengrabAI/commits/v1.0.0
-[0.1.0]: https://github.com/nuelcyoung/screengrabAI/commits/v0.1.0
+[Unreleased]: https://github.com/nuelcyoung/screengrab/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/nuelcyoung/screengrab/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/nuelcyoung/screengrab/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/nuelcyoung/screengrab/commits/v1.0.0

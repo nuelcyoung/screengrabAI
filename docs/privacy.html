@@ -116,7 +116,7 @@
         <header>
             <h1>Privacy Policy</h1>
             <p class="subtitle">ScreenGrab AI Chrome Extension</p>
-            <span class="last-updated">Last Updated: February 21, 2026</span>
+            <span class="last-updated">Last Updated: March 14, 2026</span>
         </header>
 
         <h2>1. Introduction</h2>
@@ -131,10 +131,10 @@
         <p>When you capture a screenshot, the image data lives temporarily in your browser's memory. It's gone once the analysis finishes. The App doesn't store it anywhere.</p>
         
         <h3>API Keys and Settings</h3>
-        <p>If you configure cloud AI providers like OpenAI or Anthropic, your API keys get saved locally on your device using Chrome's built-in storage. They never touch any server controlled by the App.</p>
-        
-        <h3>User Preferences</h3>
-        <p>Your extension settings stay on your device. That's it.</p>
+        <p>If you configure cloud AI providers like OpenAI, Grok, or Google, your API keys get saved locally on your device using Chrome's built-in storage (`chrome.storage.local`). They never touch any server controlled by the App.</p>
+
+        <h3>Conversation History</h3>
+        <p>When you ask follow-up questions about captured content, the conversation history is temporarily held in your browser's memory during the session. It's discarded when you close the result panel or navigate away from the page.</p>
 
         <h2>3. How Your Data Gets Used</h2>
         <p>Your screenshots are used strictly for:</p>
@@ -154,6 +154,7 @@
         <p>When you choose to use cloud AI providers, your screenshot images get sent directly to them:</p>
         <div class="provider-list">
             <ul>
+                <li><strong>Ollama Cloud</strong> — For vision and text analysis via `ollama.com` (<a href="https://ollama.com/privacy" target="_blank">Privacy Policy</a>)</li>
                 <li><strong>OpenAI</strong> — For GPT-4 Vision and text analysis (<a href="https://openai.com/privacy" target="_blank">Privacy Policy</a>)</li>
                 <li><strong>Grok (xAI)</strong> — For Grok-2 Vision and text analysis (<a href="https://x.ai/privacy" target="_blank">Privacy Policy</a>)</li>
                 <li><strong>Google Gemini</strong> — For vision and text analysis (<a href="https://policies.google.com/privacy" target="_blank">Privacy Policy</a>)</li>
@@ -164,9 +165,10 @@
 
         <h2>5. Data Storage and Retention</h2>
         <ul>
-            <li><strong>Screenshots:</strong> Processed in memory, then gone. Not retained.</li>
-            <li><strong>API Keys:</strong> Stored locally until you remove them or uninstall the App.</li>
+            <li><strong>Screenshots:</strong> Processed in browser memory, then discarded. Not retained.</li>
+            <li><strong>API Keys:</strong> Stored locally in `chrome.storage.local` until you remove them or uninstall the App.</li>
             <li><strong>Settings:</strong> Stored locally until you clear them or uninstall.</li>
+            <li><strong>Conversation History:</strong> Held temporarily in-page memory during the session, discarded when the result panel is closed.</li>
         </ul>
         <p>The App doesn't run any servers or databases that hold your personal data.</p>
 
@@ -189,9 +191,11 @@
         <h2>8. Security</h2>
         <p>Security measures in place:</p>
         <ul>
-            <li>API keys are stored using Chrome's secure storage API</li>
-            <li>No data moves anywhere without you setting it up first</li>
-            <li>Local processing keeps sensitive documents... local</li>
+            <li>API keys are stored using Chrome's secure storage API (`chrome.storage.local`)</li>
+            <li>No data moves anywhere without you configuring it first</li>
+            <li>Local processing via Ollama keeps sensitive documents completely on your device</li>
+            <li>Storage-based queue architecture ensures reliable operation even when the browser suspends background processes</li>
+            <li>SSN patterns are automatically redacted from extracted text</li>
         </ul>
 
         <h2>9. Children's Privacy</h2>

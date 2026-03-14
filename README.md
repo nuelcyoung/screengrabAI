@@ -7,7 +7,7 @@ Capture screenshots, extract text with OCR, and get AI-powered insights—withou
 ![ScreenGrab AI](https://img.shields.io/badge/Chrome-Extension-green?logo=google-chrome)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Privacy](https://img.shields.io/badge/privacy-Local%20First-brightgreen)
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.1.0-blue)
 
 ## ✨ Features
 
@@ -33,8 +33,9 @@ Capture screenshots, extract text with OCR, and get AI-powered insights—withou
 
 - **User-Friendly**
   - Floating capture icon on every page for quick access
-  - Progress indicator during analysis
+  - Floating progress indicator during analysis
   - Markdown-formatted results with tables, code blocks, and structured output
+  - In-page result display with follow-up question support
 
 ## 📸 Screenshots
 
@@ -79,8 +80,8 @@ Capture screenshots, extract text with OCR, and get AI-powered insights—withou
    - **Visible** — Capture what you see
    - **Full Page** — Capture the entire page (auto-scrolls)
    - **Select Area** — Draw a rectangle around what you want
-4. **Wait for AI analysis** — Progress indicator shows status
-5. **View results** — Text extraction and AI insights displayed
+4. **Wait for AI analysis** — Floating progress indicator shows real-time status
+5. **View results** — Text extraction and AI insights displayed in-page with follow-up question support
 
 ### Follow-Up Questions
 
@@ -93,9 +94,11 @@ After capturing, you can ask follow-up questions about the content:
 ### Redirect Mode
 
 Enable Redirect Mode in Settings to:
-1. Take a screenshot and automatically open ChatGPT or Grok with the image in your clipboard
-2. No API keys required for analysis (provider handles it)
-3. Auto-paste attempts to insert the image into the chat interface
+1. Take a screenshot and automatically open the provider's website (OpenAI ChatGPT or Grok) with the image in your clipboard
+2. No API keys required — uses your existing logged-in session
+3. The image is automatically copied to clipboard and attempts to paste into the chat interface
+
+**Note:** When Redirect Mode is enabled, no analysis result panel is shown in-page since the provider handles analysis in their web interface.
 
 ## ⚙️ Configuration
 
@@ -103,25 +106,27 @@ Enable Redirect Mode in Settings to:
 
 1. **Install Ollama**
    - Download from [ollama.com](https://ollama.com)
-   - Works on macOS, Linux, and Windows
+   - Works on macOS, Linux, and Windows (native support for Apple Silicon)
 
 2. **Pull Vision Model** (for OCR)
    ```bash
    ollama pull qwen3-vl:4b
-   # or any other vision model like llava, minicpm-v
+   # or any other vision model like llava, minicpm-v, moondream
    ```
 
 3. **Pull Text Model** (for analysis)
    ```bash
    ollama pull qwen3-coder:480b-cloud
-   # or llama3, mistral, codellama, etc.
+   # or llama3, mistral, codellama, deepseek-coder, etc.
    ```
 
 4. **Configure Extension**
    - Click extension icon → Settings (⚙️)
-   - Select **Vision Provider: Ollama Local**
-   - Select **Text Provider: Ollama Local**
-   - Choose your models
+   - Select **Vision Provider: Ollama (Local)**
+   - Select **Text Provider: Ollama (Local)**
+   - Choose your models from the dropdown
+
+> **Tip:** Ollama model names are case-sensitive. Use exact names as shown in `ollama list`.
 
 ### Cloud AI Providers (Optional)
 
@@ -129,41 +134,46 @@ If you prefer cloud-based models, configure these in Settings:
 
 | Provider | Use Case | Get API Key |
 |----------|----------|-------------|
-| **Google Cloud Vision** | OCR (vision) | [Google Cloud Console](https://console.cloud.google.com) |
+| **Ollama Cloud** | Vision + Text | [ollama.com](https://ollama.com) |
 | **OpenAI** | Vision + Text | [platform.openai.com](https://platform.openai.com) |
-| **Grok** | Vision + Text | [console.x.ai](https://console.x.ai) |
+| **Grok (xAI)** | Vision + Text | [console.x.ai](https://console.x.ai) |
 | **Google Gemini** | Vision + Text | [ai.google.dev](https://ai.google.dev) |
+| **Google Cloud Vision** | OCR (vision only) | [Google Cloud Console](https://console.cloud.google.com) |
 
 **API Keys Security:**
-- All keys are stored locally on your device
-- Keys are never sent to any server other than the respective AI provider
-- No data is routed through third-party intermediaries
+- All keys are stored locally in your browser via `chrome.storage.local`
+- Keys are only sent to the respective provider's API endpoints
+- No data is routed through third-party intermediaries or developer servers
 
 ### Redirect Mode Setup
 
 1. Enable "Redirect Mode" in Settings
-2. Select OpenAI or Grok as your Vision Provider
-3. Take a screenshot - it will open directly in ChatGPT or Grok
-4. The image is automatically copied to your clipboard
-5. Paste it in the chat (or wait for auto-paste)
+2. Select OpenAI or Grok as your Vision Provider (web providers only)
+3. Take a screenshot — it will automatically open the provider's website with the image in your clipboard
+4. The image attempts to auto-paste into the chat interface, or you can paste manually (Ctrl/Cmd+V)
+
+> **Note:** Redirect Mode works with your existing browser session — no API keys needed. Just make sure you're already logged in to the provider's website.
 
 ## 🔒 Privacy & Security
 
 ### What Gets Stored
-- **Screenshots** — Temporarily in memory during processing
-- **API Keys** — Stored locally in `chrome.storage.local`
+- **Screenshots** — Temporarily in browser memory during processing, then discarded
+- **API Keys** — Stored locally in `chrome.storage.local` (encrypted by Chrome)
 - **User Settings** — Stored locally on your device
+- **Conversation History** — Temporarily held in-page memory for follow-up questions
 
 ### What Gets Shared
-- **With Ollama (Local)** — Nothing. All processing happens on your machine.
-- **With Cloud Providers** — Only the screenshot image data for analysis. No metadata, tracking, or user identifiers.
-- **With Redirect Mode** — Screenshot is copied to your clipboard and opened in provider's web interface. The App doesn't send any data directly.
+- **With Ollama (Local)** — Nothing. All processing happens on your machine via `localhost:11434`.
+- **With Ollama Cloud** — Screenshot image sent directly to `ollama.com` API endpoints.
+- **With Cloud Providers** — Only the screenshot image data for analysis. No metadata, browsing history, or user identifiers.
+- **With Redirect Mode** — Screenshot is copied to your clipboard and the provider's website opens in a new tab. The extension doesn't send any data directly.
 
 ### What Does NOT Get Shared
 - ❌ No analytics or tracking
-- ❌ No user identification
+- ❌ No user identification or telemetry
 - ❌ No data sent to developer servers
-- ❌ No browsing history
+- ❌ No browsing history or tab contents (only captured screenshot)
+- ❌ No data shared with third parties beyond your chosen AI provider
 
 ### Compliance Notes
 - SSN patterns are automatically redacted from extracted text
@@ -207,6 +217,15 @@ screengrab/
 4. Submit to Chrome Web Store
 
 ## 🔄 Version History
+
+### Version 2.1.0 (March 2026)
+- **Fixed:** Area selection now works on first click (no double-click required)
+- **Fixed:** Ollama models now properly load and display in the model dropdown
+- **Fixed:** Follow-up questions now render markdown correctly
+- **Improved:** Area selection overlay now has 400ms grace period to prevent accidental clicks
+- **Improved:** Storage-based queue architecture for more reliable capture processing
+- **Improved:** Floating progress indicator with real-time status updates
+- **Changed:** Redirect Mode description clarified — "Opens the AI provider's website... Uses your own logged-in session"
 
 ### Version 2.0.0 (March 2026)
 - **Added:** Grok (xAI) provider support
