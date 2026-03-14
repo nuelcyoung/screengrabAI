@@ -5,11 +5,18 @@ let settings = {
     ollamaApiKey: '',
     googleApiKey: '',
     openaiApiKey: '',
-    anthropicApiKey: '',
+    grokApiKey: '',
     geminiApiKey: '',
     visionModel: 'qwen3-vl:4b',
     textModel: 'qwen3-coder:480b-cloud',
-    floatingIconEnabled: true
+    floatingIconEnabled: true,
+    useRedirectMode: false,
+    // Unified multimodal model settings (for single-step analysis)
+    useUnifiedModel: false,
+    unifiedApiProvider: '',
+    unifiedModel: '',
+    // Capture goal/prompt
+    captureGoal: ''
 };
 
 // Initialize UI
@@ -29,7 +36,7 @@ async function loadSettings() {
         'ollamaApiKey',
         'googleApiKey',
         'openaiApiKey',
-        'anthropicApiKey',
+        'grokApiKey',
         'geminiApiKey'
     ]);
     const storedSettings = stored.screengrabSettings || {};
@@ -40,11 +47,18 @@ async function loadSettings() {
         ollamaApiKey: stored.ollamaApiKey || '',
         googleApiKey: stored.googleApiKey || '',
         openaiApiKey: stored.openaiApiKey || '',
-        anthropicApiKey: stored.anthropicApiKey || '',
+        grokApiKey: stored.grokApiKey || '',
         geminiApiKey: stored.geminiApiKey || '',
         visionModel: storedSettings.visionModel || 'qwen3-vl:4b',
         textModel: storedSettings.textModel || 'qwen3-coder:480b-cloud',
-        floatingIconEnabled: storedSettings.floatingIconEnabled !== false
+        floatingIconEnabled: storedSettings.floatingIconEnabled !== false,
+        useRedirectMode: storedSettings.useRedirectMode || false,
+        // Unified multimodal model settings (for single-step analysis)
+        useUnifiedModel: storedSettings.useUnifiedModel || false,
+        unifiedApiProvider: storedSettings.unifiedApiProvider || '',
+        unifiedModel: storedSettings.unifiedModel || '',
+        // Capture goal/prompt
+        captureGoal: storedSettings.captureGoal || ''
     };
 }
 
@@ -79,6 +93,7 @@ function setupUI() {
     const textModel = document.getElementById('text-model');
 
     const floatingIconEnabled = document.getElementById('floating-icon-enabled');
+    const redirectModeEnabled = document.getElementById('redirect-mode-enabled');
     const saveSettingsBtn = document.getElementById('save-settings');
     const saveIndicator = document.getElementById('save-indicator');
 
@@ -86,21 +101,21 @@ function setupUI() {
     const ollamaApiKey = document.getElementById('ollama-api-key');
     const googleApiKey = document.getElementById('google-api-key');
     const openaiApiKey = document.getElementById('openai-api-key');
-    const anthropicApiKey = document.getElementById('anthropic-api-key');
+    const grokApiKey = document.getElementById('grok-api-key');
     const geminiApiKey = document.getElementById('gemini-api-key');
 
     // Status badges
     const ollamaKeyStatus = document.getElementById('ollama-key-status');
     const googleKeyStatus = document.getElementById('google-key-status');
     const openaiKeyStatus = document.getElementById('openai-key-status');
-    const anthropicKeyStatus = document.getElementById('anthropic-key-status');
+    const grokKeyStatus = document.getElementById('grok-key-status');
     const geminiKeyStatus = document.getElementById('gemini-key-status');
 
     // Key groups
     const ollamaKeyGroup = document.getElementById('ollama-key-group');
     const googleKeyGroup = document.getElementById('google-key-group');
     const openaiKeyGroup = document.getElementById('openai-key-group');
-    const anthropicKeyGroup = document.getElementById('anthropic-key-group');
+    const grokKeyGroup = document.getElementById('grok-key-group');
     const geminiKeyGroup = document.getElementById('gemini-key-group');
     const noApiKeysHint = document.getElementById('no-api-keys-hint');
 
@@ -108,7 +123,7 @@ function setupUI() {
     const saveOllamaKeyBtn = document.getElementById('save-ollama-key');
     const saveGoogleKeyBtn = document.getElementById('save-google-key');
     const saveOpenAIKeyBtn = document.getElementById('save-openai-key');
-    const saveAnthropicKeyBtn = document.getElementById('save-anthropic-key');
+    const saveGrokKeyBtn = document.getElementById('save-grok-key');
     const saveGeminiKeyBtn = document.getElementById('save-gemini-key');
 
     const exportBtn = document.getElementById('export-settings');
@@ -122,17 +137,19 @@ function setupUI() {
     ollamaApiKey.value = settings.ollamaApiKey || '';
     googleApiKey.value = settings.googleApiKey || '';
     openaiApiKey.value = settings.openaiApiKey || '';
-    anthropicApiKey.value = settings.anthropicApiKey || '';
+    grokApiKey.value = settings.grokApiKey || '';
     geminiApiKey.value = settings.geminiApiKey || '';
     floatingIconEnabled.checked = settings.floatingIconEnabled;
+    redirectModeEnabled.checked = settings.useRedirectMode;
 
     // Helper functions
     const updateKeyVisibility = () => {
         const vProvider = visionApiProvider.value;
         const tProvider = textApiProvider.value;
+        const isRedirect = redirectModeEnabled.checked; // Check if Redirect Mode is active
 
         // Hide all first
-        [ollamaKeyGroup, googleKeyGroup, openaiKeyGroup, anthropicKeyGroup, geminiKeyGroup].forEach(g => {
+        [ollamaKeyGroup, googleKeyGroup, openaiKeyGroup, grokKeyGroup, geminiKeyGroup].forEach(g => {
             g.style.display = 'none';
             g.classList.remove('missing-key');
         });
@@ -149,25 +166,34 @@ function setupUI() {
             showKeyGroup(ollamaKeyGroup, settings.ollamaApiKey);
             needed = true;
         }
-        if (vProvider === 'google-vision') {
-            showKeyGroup(googleKeyGroup, settings.googleApiKey);
-            needed = true;
-        }
-        if (vProvider === 'openai' || tProvider === 'openai') {
-            showKeyGroup(openaiKeyGroup, settings.openaiApiKey);
-            needed = true;
-        }
-        if (vProvider === 'anthropic' || tProvider === 'anthropic') {
-            showKeyGroup(anthropicKeyGroup, settings.anthropicApiKey);
-            needed = true;
-        }
-        if (vProvider === 'google-gemini' || tProvider === 'google-gemini') {
-            showKeyGroup(geminiKeyGroup, settings.geminiApiKey);
-            needed = true;
+
+        // If it is Redirect Mode, we don't need UI for API Keys for web providers!
+        if (!isRedirect) {
+            if (vProvider === 'google-vision') {
+                showKeyGroup(googleKeyGroup, settings.googleApiKey);
+                needed = true;
+            }
+            if (vProvider === 'openai' || tProvider === 'openai') {
+                showKeyGroup(openaiKeyGroup, settings.openaiApiKey);
+                needed = true;
+            }
+            if (vProvider === 'grok' || tProvider === 'grok') {
+                showKeyGroup(grokKeyGroup, settings.grokApiKey);
+                needed = true;
+            }
+            if (vProvider === 'google-gemini' || tProvider === 'google-gemini') {
+                showKeyGroup(geminiKeyGroup, settings.geminiApiKey);
+                needed = true;
+            }
         }
 
         if (!needed) {
             noApiKeysHint.style.display = 'block';
+            if (isRedirect) {
+                noApiKeysHint.innerHTML = '<p>Redirect Mode is enabled. No API keys needed for web providers.</p>';
+            } else {
+                noApiKeysHint.innerHTML = '<p>No API keys needed for local Ollama. Select a cloud provider in AI Models to add keys.</p>';
+            }
         }
     };
 
@@ -185,7 +211,7 @@ function setupUI() {
         updateStatus(settings.ollamaApiKey, ollamaKeyStatus);
         updateStatus(settings.googleApiKey, googleKeyStatus);
         updateStatus(settings.openaiApiKey, openaiKeyStatus);
-        updateStatus(settings.anthropicApiKey, anthropicKeyStatus);
+        updateStatus(settings.grokApiKey, grokKeyStatus);
         updateStatus(settings.geminiApiKey, geminiKeyStatus);
     };
 
@@ -202,6 +228,13 @@ function setupUI() {
 
     textApiProvider.addEventListener('change', () => {
         updateKeyVisibility();
+        fetchAndPopulateModels('text', textApiProvider.value);
+    });
+
+    redirectModeEnabled.addEventListener('change', () => {
+        settings.useRedirectMode = redirectModeEnabled.checked; // Sync temporary setting for UI effects
+        updateKeyVisibility();
+        fetchAndPopulateModels('vision', visionApiProvider.value);
         fetchAndPopulateModels('text', textApiProvider.value);
     });
 
@@ -224,7 +257,7 @@ function setupUI() {
     setupSaveKeyHandler(saveOllamaKeyBtn, ollamaApiKey, 'ollamaApiKey');
     setupSaveKeyHandler(saveGoogleKeyBtn, googleApiKey, 'googleApiKey');
     setupSaveKeyHandler(saveOpenAIKeyBtn, openaiApiKey, 'openaiApiKey');
-    setupSaveKeyHandler(saveAnthropicKeyBtn, anthropicApiKey, 'anthropicApiKey');
+    setupSaveKeyHandler(saveGrokKeyBtn, grokApiKey, 'grokApiKey');
     setupSaveKeyHandler(saveGeminiKeyBtn, geminiApiKey, 'geminiApiKey');
 
     saveSettingsBtn.addEventListener('click', async () => {
@@ -233,7 +266,14 @@ function setupUI() {
             textApiProvider: textApiProvider.value,
             visionModel: visionModel.value,
             textModel: textModel.value,
-            floatingIconEnabled: floatingIconEnabled.checked
+            floatingIconEnabled: floatingIconEnabled.checked,
+            useRedirectMode: redirectModeEnabled.checked,
+            // Note: useUnifiedModel, unifiedApiProvider, unifiedModel are set via separate UI
+            // They will be included when those UI elements are saved
+            ...settings.useUnifiedModel !== undefined ? { useUnifiedModel: settings.useUnifiedModel } : {},
+            ...settings.unifiedApiProvider !== undefined ? { unifiedApiProvider: settings.unifiedApiProvider } : {},
+            ...settings.unifiedModel !== undefined ? { unifiedModel: settings.unifiedModel } : {},
+            ...settings.captureGoal !== undefined ? { captureGoal: settings.captureGoal } : {}
         };
 
         await chrome.storage.local.set({ screengrabSettings: newSettings });
@@ -254,7 +294,7 @@ function setupUI() {
     exportBtn.addEventListener('click', () => {
         // Create a copy of settings with masked API keys
         const exportSettings = { ...settings };
-        ['ollamaApiKey', 'googleApiKey', 'openaiApiKey', 'anthropicApiKey', 'geminiApiKey'].forEach(k => {
+        ['ollamaApiKey', 'googleApiKey', 'openaiApiKey', 'grokApiKey', 'geminiApiKey'].forEach(k => {
             if (exportSettings[k]) exportSettings[k] = 'xxxxxxxxxx';
         });
 
@@ -312,12 +352,20 @@ async function fetchAndPopulateModels(type, provider) {
     try {
         let apiKey = '';
         if (provider === 'openai') apiKey = settings.openaiApiKey;
-        if (provider === 'anthropic') apiKey = settings.anthropicApiKey;
+        if (provider === 'grok') apiKey = settings.grokApiKey;
         if (provider === 'google-gemini') apiKey = settings.geminiApiKey;
         if (provider === 'ollama-cloud') apiKey = settings.ollamaApiKey;
 
         // processing for local ollama doesn't need key
         const isLocal = provider === 'ollama';
+        const isRedirect = settings.useRedirectMode; // Local setting state
+
+        // In redirect mode, no API Key is needed OR models for that matter (for web providers)
+        if (isRedirect && ['openai', 'grok'].includes(provider)) {
+            select.innerHTML = `<option value="${originalValue || 'default'}">Provider Chat (Redirect Mode)</option>`;
+            select.disabled = true;
+            return;
+        }
 
         if (!apiKey && !isLocal) {
             select.innerHTML = '<option value="">Please enter API Key first</option>';
@@ -333,12 +381,12 @@ async function fetchAndPopulateModels(type, provider) {
             // For vision, we try to prefer vision-capable models
             // But strict filtering is hard without metadata
             if (provider === 'ollama' || provider === 'ollama-cloud') {
-                const categorized = AIService.categorizeModels(models);
-                filteredModels = categorized.visionModels.length > 0 ? categorized.visionModels : models;
+                const categorized = await AIService.categorizeModels(models);
+                filteredModels = categorized.multimodal.length > 0 ? categorized.multimodal : models;
             } else if (provider === 'openai') {
                 filteredModels = models.filter(m => m.id.includes('gpt-4') || m.id.includes('vision'));
-            } else if (provider === 'anthropic') {
-                filteredModels = models.filter(m => m.id.includes('sonnet') || m.id.includes('opus'));
+            } else if (provider === 'grok') {
+                filteredModels = models.filter(m => m.id.includes('vision'));
             }
         } else {
             // For text, all models usually work, but we might filter out vision-only if known

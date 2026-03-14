@@ -10,7 +10,10 @@ const CaptureQueue = {
     KEYS: {
         REQUEST: 'captureRequest',
         STATE: 'currentCapture',
-        SETTINGS: 'screengrabSettings'
+        SETTINGS: 'screengrabSettings',
+        FOLLOW_UP_REQUEST: 'followUpRequest',
+        FOLLOW_UP_RESPONSE: 'followUpResponse',
+        PROCESSING_LOCK: 'captureProcessingLock'  // Prevents race conditions
     },
 
     /**
@@ -31,12 +34,42 @@ const CaptureQueue = {
 
     /**
      * Dequeue a capture request (called by background.js)
+     *
+     * Uses chrome.storage.session for a processing lock to prevent race conditions
+     * when storage listeners fire multiple times in quick succession.
+     *
+     * The lock persists across service worker restarts, solving the issue where
+     * pollingActive flag gets reset on worker suspension.
      */
     async dequeue() {
+        // Check if we're already processing a request using session storage lock
+        try {
+            const lockData = await chrome.storage.session.get(this.KEYS.PROCESSING_LOCK);
+            if (lockData[this.KEYS.PROCESSING_LOCK]) {
+                console.log('[CaptureQueue] Already processing a request, skipping dequeue');
+                return null;
+            }
+        } catch (e) {
+            // session.storage might not be available, continue anyway
+            console.warn('[CaptureQueue] Could not check processing lock:', e);
+        }
+
         const data = await chrome.storage.local.get(this.KEYS.REQUEST);
         const request = data[this.KEYS.REQUEST];
 
         if (request && request.status === 'pending') {
+            // Set the processing lock BEFORE updating the request status
+            try {
+                await chrome.storage.session.set({
+                    [this.KEYS.PROCESSING_LOCK]: {
+                        requestId: request.id,
+                        timestamp: Date.now()
+                    }
+                });
+            } catch (e) {
+                console.warn('[CaptureQueue] Could not set processing lock:', e);
+            }
+
             // Mark as processing to prevent double-processing
             request.status = 'processing';
             await chrome.storage.local.set({ [this.KEYS.REQUEST]: request });
@@ -47,10 +80,16 @@ const CaptureQueue = {
     },
 
     /**
-     * Clear the current request
+     * Clear the current request and processing lock
      */
     async clear() {
         await chrome.storage.local.remove(this.KEYS.REQUEST);
+        // Also clear the processing lock
+        try {
+            await chrome.storage.session.remove(this.KEYS.PROCESSING_LOCK);
+        } catch (e) {
+            // Ignore errors if session.storage unavailable
+        }
     },
 
     /**
@@ -78,10 +117,16 @@ const CaptureQueue = {
     },
 
     /**
-     * Reset state (clear everything)
+     * Reset state (clear everything including processing lock)
      */
     async reset() {
         await chrome.storage.local.remove([this.KEYS.REQUEST, this.KEYS.STATE]);
+        // Also clear the processing lock
+        try {
+            await chrome.storage.session.remove(this.KEYS.PROCESSING_LOCK);
+        } catch (e) {
+            // Ignore errors if session.storage unavailable
+        }
     },
 
     /**
@@ -100,7 +145,6 @@ const CaptureQueue = {
             'ollamaApiKey',
             'googleApiKey',
             'openaiApiKey',
-            'anthropicApiKey',
             'geminiApiKey'
         ]);
         const settings = data[this.KEYS.SETTINGS] || {};
@@ -109,7 +153,6 @@ const CaptureQueue = {
             ollamaApiKey: data.ollamaApiKey || '',
             googleApiKey: data.googleApiKey || '',
             openaiApiKey: data.openaiApiKey || '',
-            anthropicApiKey: data.anthropicApiKey || '',
             geminiApiKey: data.geminiApiKey || ''
         };
     },
@@ -126,7 +169,7 @@ const CaptureQueue = {
     },
 
     /**
-     * Safe runtime message sender - never throws on connection errors  
+     * Safe runtime message sender - never throws on connection errors
      */
     async safeRuntimeMessage(message) {
         try {
@@ -134,6 +177,80 @@ const CaptureQueue = {
         } catch (error) {
             return null;
         }
+    },
+
+    /**
+     * Request a follow-up question (storage-based, works even when service worker is suspended)
+     */
+    async requestFollowUp(question, conversationHistory) {
+        const requestId = `followup_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        await chrome.storage.local.set({
+            [this.KEYS.FOLLOW_UP_REQUEST]: {
+                id: requestId,
+                question: question,
+                conversationHistory: conversationHistory,
+                timestamp: Date.now(),
+                status: 'pending'
+            }
+        });
+
+        // Clear any previous response
+        await chrome.storage.local.remove(this.KEYS.FOLLOW_UP_RESPONSE);
+
+        return requestId;
+    },
+
+    /**
+     * Get follow-up request (called by background.js)
+     */
+    async getFollowUpRequest() {
+        const data = await chrome.storage.local.get(this.KEYS.FOLLOW_UP_REQUEST);
+        const request = data[this.KEYS.FOLLOW_UP_REQUEST];
+
+        if (request && request.status === 'pending') {
+            // Mark as processing
+            request.status = 'processing';
+            await chrome.storage.local.set({ [this.KEYS.FOLLOW_UP_REQUEST]: request });
+            return request;
+        }
+
+        return null;
+    },
+
+    /**
+     * Clear follow-up request
+     */
+    async clearFollowUpRequest() {
+        await chrome.storage.local.remove(this.KEYS.FOLLOW_UP_REQUEST);
+    },
+
+    /**
+     * Set follow-up response (called by background.js)
+     */
+    async setFollowUpResponse(response, error = null) {
+        await chrome.storage.local.set({
+            [this.KEYS.FOLLOW_UP_RESPONSE]: {
+                response: response,
+                error: error,
+                timestamp: Date.now()
+            }
+        });
+    },
+
+    /**
+     * Get follow-up response (called by floating-icon.js)
+     */
+    async getFollowUpResponse() {
+        const data = await chrome.storage.local.get(this.KEYS.FOLLOW_UP_RESPONSE);
+        return data[this.KEYS.FOLLOW_UP_RESPONSE] || null;
+    },
+
+    /**
+     * Clear follow-up response
+     */
+    async clearFollowUpResponse() {
+        await chrome.storage.local.remove(this.KEYS.FOLLOW_UP_RESPONSE);
     }
 };
 

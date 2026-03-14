@@ -1,8 +1,5 @@
-// Import utility functions
-function generateRandomId(prefix = '') {
-  const randomString = Math.random().toString(36).substr(2, 9);
-  return prefix ? `${prefix}_${randomString}` : randomString;
-}
+// Import utility functions from utils.js (loaded as content script before this file)
+// generateRandomId, escapeHtml, parseMarkdown, sanitizeSensitiveData are available globally
 
 // Generate random IDs for stealth
 const FLOAT_BTN_ID = generateRandomId('sg_float_btn');
@@ -74,12 +71,19 @@ function createMenu() {
       e.stopPropagation();
       const mode = e.currentTarget.dataset.mode;
 
-      // Immediately hide both menu and floating button for cleaner UX
+      // Immediately hide menu
       hideMenu();
-      if (floatBtn) floatBtn.style.display = 'none';
 
-      // Start capture and wait for it to initialize
-      await startCapture(mode);
+      // For area mode, hide the floating icon and start selection
+      // For visible/full modes, keep the icon visible during capture
+      if (mode === 'area') {
+        if (floatBtn) floatBtn.style.display = 'none';
+        await startCapture(mode);
+      } else {
+        // For visible/full modes, hide button during capture
+        if (floatBtn) floatBtn.style.display = 'none';
+        await startCapture(mode);
+      }
     });
   });
 
@@ -120,6 +124,7 @@ async function startCapture(mode) {
   // Check if extension context is still valid
   const contextValid = await isExtensionContextValid();
   if (!contextValid) {
+    console.error('[Floating Icon] Extension context invalid');
     // Show error using the shared progress indicator
     try {
       await chrome.runtime.sendMessage({
@@ -143,19 +148,12 @@ async function startCapture(mode) {
   if (floatBtn) floatBtn.style.display = 'none';
   hideMenu();
 
-  // Reset any previous capture state before starting new capture
-  await chrome.storage.local.remove(['captureRequest', 'currentCapture']);
-
   try {
-    // Enqueue the capture request (background.js uses storage listeners)
-    await chrome.storage.local.set({
-      captureRequest: {
-        id: `capture_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        mode: mode,
-        url: window.location.href,
-        timestamp: Date.now(),
-        status: 'pending'
-      }
+    // Use CaptureQueue.enqueue() instead of reimplementing it
+    // This ensures consistent ID generation and future-proofing
+    const requestId = await CaptureQueue.enqueue({
+      mode: mode,
+      url: window.location.href
     });
   } catch (error) {
     console.error('[Floating Icon] Start capture error:', error);
@@ -164,14 +162,24 @@ async function startCapture(mode) {
   }
 }
 
+// Flag to prevent recursive storage listener calls
+let _isProcessingStateChange = false;
+
 // Listen for storage changes to update UI status
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
+
+  // Prevent recursive calls when we clear storage
+  if (_isProcessingStateChange) {
+    return;
+  }
 
   // Wrap everything in try-catch to handle context invalidation gracefully
   try {
     if (changes.currentCapture && changes.currentCapture.newValue) {
       const state = changes.currentCapture.newValue;
+
+      _isProcessingStateChange = true;
 
       switch (state.status) {
         case 'capturing':
@@ -187,28 +195,42 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
           // Progress indicator handles this via background script
           break;
         case 'complete':
-          // Clear storage state after completion
-          chrome.storage.local.remove(['currentCapture', 'captureRequest']);
-          if (state.result) {
+          // Clear storage state after completion (use setTimeout to avoid recursive trigger)
+          setTimeout(() => {
+            chrome.storage.local.remove(['currentCapture', 'captureRequest']).catch(() => {});
+            _isProcessingStateChange = false;
+          }, 100);
+
+          // Only show result panel if NOT in redirect mode
+          // Redirect mode opens a new tab to the provider, so no result to display
+          if (state.result && !state.useRedirectMode) {
             showResultOnPage(state.result);
           }
           if (floatBtn) floatBtn.style.display = '';
-          break;
+          return;
         case 'error':
-          // Clear storage state after error
-          chrome.storage.local.local.remove(['currentCapture', 'captureRequest']);
+          // Clear storage state after error (use setTimeout to avoid recursive trigger)
+          setTimeout(() => {
+            chrome.storage.local.remove(['currentCapture', 'captureRequest']).catch(() => {});
+            _isProcessingStateChange = false;
+          }, 100);
           if (floatBtn) floatBtn.style.display = '';
-          break;
+          return;
         case 'cancelled':
-          // Clear storage state after cancellation
-          chrome.storage.local.remove(['currentCapture', 'captureRequest']);
+          // Clear storage state after cancellation (use setTimeout to avoid recursive trigger)
+          setTimeout(() => {
+            chrome.storage.local.remove(['currentCapture', 'captureRequest']).catch(() => {});
+            _isProcessingStateChange = false;
+          }, 100);
           if (floatBtn) floatBtn.style.display = '';
-          break;
+          return;
       }
+
+      _isProcessingStateChange = false;
     }
   } catch (error) {
+    _isProcessingStateChange = false;
     // If we get here, the extension context was invalidated during the operation
-    console.error('[Floating Icon] Storage listener error:', error);
     if (error.message.includes('Extension context') || error.message.includes('context invalidated')) {
       if (floatBtn) floatBtn.style.display = '';
     }
@@ -325,37 +347,20 @@ function parseResultToConversation(resultHtml) {
 async function handleFollowUpQuestion(question, conversationHistory, displayInstance) {
   // Use the passed instance or fall back to global
   const resultDisplay = displayInstance || window.__sg_current_result_display;
-  
-  try {
-    // Check if extension context is still valid
-    const contextValid = await isExtensionContextValid();
-    if (!contextValid) {
-      throw new Error('Extension was reloaded. Please reload this page to continue.');
-    }
 
+  try {
     // Show loading state
     if (resultDisplay) {
       resultDisplay.setFollowUpLoading(true);
     }
 
-    // Send to background script for processing
-    const response = await chrome.runtime.sendMessage({
-      action: 'followUpQuestion',
-      question: question,
-      conversationHistory: conversationHistory
-    });
+    // Use storage-based follow-up queue (works even when service worker is suspended)
+    const requestId = await CaptureQueue.requestFollowUp(question, conversationHistory);
 
-    if (response && response.success) {
-      // Use the response directly
-      if (resultDisplay) {
-        resultDisplay.setFollowUpLoading(false);
-        resultDisplay.appendFollowUpResponse(response.response);
-      }
-    } else {
-      throw new Error(response?.error || 'Failed to process follow-up question');
-    }
+    // Poll for response using storage (same pattern as capture polling)
+    await pollForFollowUpResponse(resultDisplay);
+
   } catch (error) {
-    console.error('[Floating Icon] Follow-up question error:', error);
     if (resultDisplay) {
       resultDisplay.setFollowUpLoading(false);
       // Show error in the message area
@@ -366,11 +371,42 @@ async function handleFollowUpQuestion(question, conversationHistory, displayInst
   }
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+// Poll for follow-up response (storage-based, works when service worker is suspended)
+async function pollForFollowUpResponse(resultDisplay) {
+  const maxWait = 120000; // 2 minutes
+  const pollInterval = 500;
+  let elapsed = 0;
+
+  while (elapsed < maxWait) {
+    const response = await CaptureQueue.getFollowUpResponse();
+
+    if (response) {
+      await CaptureQueue.clearFollowUpResponse();
+
+      if (resultDisplay) {
+        resultDisplay.setFollowUpLoading(false);
+
+        if (response.error) {
+          resultDisplay.appendFollowUpResponse(`Error: ${response.error}`);
+        } else {
+          resultDisplay.appendFollowUpResponse(response.response);
+        }
+      }
+      return;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    elapsed += pollInterval;
+  }
+
+  // Timeout
+  if (resultDisplay) {
+    resultDisplay.setFollowUpLoading(false);
+    resultDisplay.appendFollowUpResponse('Error: Request timed out. Please try again.');
+  }
 }
+
+// escapeHtml is imported from utils.js (loaded before this file)
 
 // Check if floating icon should be enabled
 async function checkEnabled() {

@@ -1,8 +1,5 @@
-// Import utility functions
-function generateRandomId(prefix = '') {
-  const randomString = Math.random().toString(36).substr(2, 9);
-  return prefix ? `${prefix}_${randomString}` : randomString;
-}
+// Import utility functions from utils.js (loaded as content script before this file)
+// generateRandomId, parseMarkdown, escapeHtml are available globally
 
 class ResultDisplay {
   constructor() {
@@ -137,7 +134,7 @@ class ResultDisplay {
       console.error('[ResultDisplay] Cannot show result: display has been destroyed or not initialized');
       return;
     }
-    
+
     this.content.innerHTML = html;
 
     // Trigger animation
@@ -203,9 +200,16 @@ class ResultDisplay {
     messageDiv.className = `screengrab-message screengrab-message-${role}`;
 
     const label = role === 'user' ? 'You' : 'AI';
+
+    // SECURITY: Prevent XSS attacks
+    // - For 'user' role: Escape content (plain text input from user)
+    // - For 'assistant' role: Content is already HTML from parseMarkdown (which escapes HTML)
+    // - We only escape user input; AI responses are pre-processed by parseMarkdown
+    const safeContent = role === 'user' ? escapeHtml(content) : content;
+
     messageDiv.innerHTML = `
       <div class="screengrab-message-label">${label}</div>
-      <div class="screengrab-message-content">${content}</div>
+      <div class="screengrab-message-content">${safeContent}</div>
     `;
 
     this.content.appendChild(messageDiv);
@@ -216,7 +220,7 @@ class ResultDisplay {
 
   appendFollowUpResponse(response) {
     // Parse markdown and add response to content
-    const htmlResponse = this.parseMarkdown(response);
+    const htmlResponse = parseMarkdown(response);
     this.appendMessage('assistant', htmlResponse);
 
     // Store original markdown in conversation history
@@ -248,79 +252,6 @@ class ResultDisplay {
     }
   }
 
-  escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  parseMarkdown(text) {
-    if (!text) return '';
-
-    let html = text;
-
-    // Escape HTML first, but preserve markdown
-    html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-    // Code blocks (must be before other processing)
-    html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // Headers
-    html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
-    html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
-    html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
-    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^##\s+(.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^#\s+(.+)$/gm, '<h2>$1</h2>');
-
-    // Bold and Italic
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-    // Tables
-    html = html.replace(/\|(.+)\|/g, (match, content) => {
-      const cells = content.split('|').map(c => c.trim());
-      return '<tr>' + cells.map(c => `<td>${c || ''}</td>`).join('') + '</tr>';
-    });
-
-    // Wrap tables
-    html = html.replace(/(<tr>[\s\S]*?<\/tr>)+/g, (match) => {
-      return '<table>' + match + '</table>';
-    });
-
-    // Horizontal rules
-    html = html.replace(/^---+$/gm, '<hr>');
-
-    // Unordered lists
-    html = html.replace(/^[\*\-]\s+(.+)$/gm, '<li>$1</li>');
-    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-
-    // Line breaks
-    html = html.replace(/\n\n/g, '</p><p>');
-    html = html.replace(/\n/g, '<br>');
-
-    // Wrap in paragraphs
-    html = '<div>' + html + '</div>';
-
-    // Clean up empty paragraphs
-    html = html.replace(/<p><\/p>/g, '');
-    html = html.replace(/<p>\s*<\/p>/g, '');
-    html = html.replace(/<p>\s*(<h[1-6]>)/g, '$1');
-    html = html.replace(/(<\/h[1-6]>)\s*<\/p>/g, '$1');
-    html = html.replace(/<p>\s*(<ul>)/g, '$1');
-    html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
-    html = html.replace(/<p>\s*(<table>)/g, '$1');
-    html = html.replace(/(<\/table>)\s*<\/p>/g, '$1');
-    html = html.replace(/<p>\s*(<pre>)/g, '$1');
-    html = html.replace(/(<\/pre>)\s*<\/p>/g, '$1');
-
-    return html;
-  }
-
   destroy() {
     // IMPORTANT: Always call the cleanup callback to ensure state is disposed
     // This must happen regardless of DOM state
@@ -334,27 +265,35 @@ class ResultDisplay {
       window.__sg_current_result_display = null;
     }
 
-    if (this.panel && this.panel.parentNode) {
-      this.panel.classList.remove('sg-visible');
-      if (this.backdrop) this.backdrop.classList.remove('sg-visible');
+    // Guard against double-destroy
+    if (!this.panel) {
+      return;  // Already destroyed
+    }
+
+    // Save references before clearing them
+    const panel = this.panel;
+    const backdrop = this.backdrop;
+
+    // Clear IMMEDIATELY to prevent race conditions with double-destroy calls
+    this.panel = null;
+    this.backdrop = null;
+    this.content = null;
+    this.followUpInput = null;
+    this.followUpSubmit = null;
+
+    // Remove from DOM with animation
+    if (panel && panel.parentNode) {
+      panel.classList.remove('sg-visible');
+      if (backdrop) backdrop.classList.remove('sg-visible');
 
       setTimeout(() => {
-        if (this.panel && this.panel.parentNode) {
-          this.panel.parentNode.removeChild(this.panel);
+        if (panel && panel.parentNode) {
+          panel.parentNode.removeChild(panel);
         }
-        if (this.backdrop && this.backdrop.parentNode) {
-          this.backdrop.parentNode.removeChild(this.backdrop);
+        if (backdrop && backdrop.parentNode) {
+          backdrop.parentNode.removeChild(backdrop);
         }
-        // Clean up remaining references
-        this.panel = null;
-        this.backdrop = null;
-        this.content = null;
       }, 400);
-    } else {
-      // Even if panel doesn't exist, clean up references
-      this.panel = null;
-      this.backdrop = null;
-      this.content = null;
     }
 
     // Clean up follow-up related state

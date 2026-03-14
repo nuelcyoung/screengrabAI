@@ -1,20 +1,59 @@
 // Background service worker for handling captures
 // Health sector compliance: Secure data handling and privacy protection
 
+// Import utility functions first (provides parseMarkdown, escapeHtml, sanitizeSensitiveData)
+importScripts('utils.js');
 // Import AIService for centralized API calls
 importScripts('ai-service.js');
+// Import MultimodalService for unified and redirect mode support
+importScripts('ai-service-multimodal.js');
 // Import CaptureQueue for storage-based communication
 importScripts('capture-queue.js');
 
 let pollingActive = false;
 
-// Optional privacy feature: Sanitize sensitive data patterns
-function sanitizeSensitiveData(data) {
-  if (typeof data === 'string') {
-    // Only redact obvious SSN patterns
-    data = data.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED_SSN]');
+// Ensure offscreen document exists for image operations
+async function ensureOffscreenDocument() {
+  const existingContext = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+    documentUrls: [chrome.runtime.getURL('offscreen.html')]
+  });
+
+  if (existingContext.length > 0) {
+    return; // Already exists
   }
-  return data;
+
+  // Create new offscreen document
+  await chrome.offscreen.createDocument({
+    url: chrome.runtime.getURL('offscreen.html'),
+    reasons: ['IMAGE_PROCESSING'],
+    justify: 'Image resizing and processing for screenshot capture'
+  });
+}
+
+// Resize image if needed to prevent API 413 errors
+async function resizeImageIfNeeded(base64Image, maxSize = 1920) {
+  try {
+    // Ensure offscreen document exists
+    await ensureOffscreenDocument();
+
+    // Call resizeImage in offscreen document
+    const response = await chrome.runtime.sendMessage({
+      action: 'resizeImage',
+      base64Image,
+      maxSize
+    });
+
+    if (response && response.dataUrl) {
+      return response.dataUrl;
+    }
+
+    // If resize failed, return original
+    return base64Image;
+  } catch (error) {
+    console.warn('[Background] Image resize failed, using original:', error.message);
+    return base64Image;
+  }
 }
 
 // Check if URL is restricted
@@ -28,45 +67,94 @@ function isRestrictedUrl(url) {
   return restrictedPatterns.some(pattern => url.startsWith(pattern));
 }
 
+// Flag to prevent recursive storage listener calls
+let _isProcessingStorageChange = false;
+
 // Listen for storage changes to handle capture requests and area selections
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
 
-  // Handle new capture requests
-  if (changes.captureRequest && changes.captureRequest.newValue) {
-    processQueuedRequest();
+  // Prevent recursive calls when we modify storage
+  if (_isProcessingStorageChange) {
+    return;
   }
 
-  // Handle area selection completion
-  if (changes.areaSelection && changes.areaSelection.newValue !== undefined) {
-    handleAreaSelectionChange(changes.areaSelection.newValue);
-  }
+  try {
+    _isProcessingStorageChange = true;
 
-  // Reset polling flag when capture completes, errors, or is cancelled
-  // This ensures new captures can start immediately
-  if (changes.currentCapture && changes.currentCapture.newValue) {
-    const status = changes.currentCapture.newValue.status;
-    if (status === 'complete' || status === 'error' || status === 'cancelled') {
-      pollingActive = false;
+    // Handle new capture requests
+    if (changes.captureRequest && changes.captureRequest.newValue) {
+      const request = changes.captureRequest.newValue;
+      console.log('[Background] Capture request received:', request);
+      // Use setTimeout to break the call stack and allow the storage event to complete
+      setTimeout(() => {
+        _isProcessingStorageChange = false;
+        processQueuedRequest();
+      }, 0);
+      return;
     }
+
+    // Handle area selection completion
+    if (changes.areaSelection && changes.areaSelection.newValue !== undefined) {
+      setTimeout(() => {
+        _isProcessingStorageChange = false;
+        handleAreaSelectionChange(changes.areaSelection.newValue);
+      }, 0);
+      return;
+    }
+
+    // Handle follow-up requests (storage-based, works when service worker is suspended)
+    if (changes.followUpRequest && changes.followUpRequest.newValue) {
+      setTimeout(() => {
+        _isProcessingStorageChange = false;
+        processFollowUpRequest();
+      }, 0);
+      return;
+    }
+
+    // Reset polling flag when capture completes, errors, or is cancelled
+    // This ensures new captures can start immediately
+    if (changes.currentCapture && changes.currentCapture.newValue) {
+      const status = changes.currentCapture.newValue.status;
+      if (status === 'complete' || status === 'error' || status === 'cancelled') {
+        pollingActive = false;
+      }
+    }
+
+    _isProcessingStorageChange = false;
+  } catch (error) {
+    _isProcessingStorageChange = false;
+    console.error('[Background] Storage listener error:', error);
   }
 });
 
 // Process queued request (called from storage listener)
 async function processQueuedRequest() {
-  if (pollingActive) return;
+  console.log('[Background] processQueuedRequest called, pollingActive:', pollingActive);
+
+  if (pollingActive) {
+    console.log('[Background] Already polling, skipping');
+    return;
+  }
 
   try {
     const request = await CaptureQueue.dequeue();
-    if (!request) return;
+    if (!request) {
+      console.log('[Background] No request to process');
+      return;
+    }
 
+    console.log('[Background] Processing request:', request);
     pollingActive = true;
     let { mode, tabId, url } = request;
+
+    console.log('[Background] Mode:', mode, 'Tab ID:', tabId, 'URL:', url);
 
     // Fallback: If tabId is missing (from floating icon), find the active tab
     if (!tabId) {
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
       tabId = activeTab?.id;
+      console.log('[Background] Resolved tabId from active tab:', tabId);
     }
 
     if (!tabId) {
@@ -86,15 +174,20 @@ async function processQueuedRequest() {
       result: null
     });
 
+    console.log('[Background] Starting capture for mode:', mode);
+
     if (mode === 'visible') {
+      console.log('[Background] Capturing visible tab');
       const tab = await chrome.tabs.get(tabId);
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
       await processCapturedImage(dataUrl, tabId);
     } else if (mode === 'full') {
+      console.log('[Background] Capturing full page');
       const tab = await chrome.tabs.get(tabId);
       const dataUrl = await captureFullPage(tab);
       await processCapturedImage(dataUrl, tabId);
     } else if (mode === 'area') {
+      console.log('[Background] Starting area selection');
       await startAreaSelection(tabId);
     }
   } catch (error) {
@@ -122,60 +215,43 @@ async function startAreaSelection(tabId) {
       throw new Error('Cannot capture screenshots on this page (Restricted URL).');
     }
 
-    // Inject selector resources
-    await chrome.scripting.insertCSS({ target: { tabId }, files: ['selector.css'] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['selector.js'] });
+    // Update state to 'selecting' BEFORE injecting so UI shows immediate feedback
+    await CaptureQueue.updateState({ status: 'selecting', tabId });
 
-    // Wait for script to execute and AreaSelector to be available
-    // Increased delay to ensure overlay is fully ready to receive clicks
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    // Clean up any existing area selection state
+    // Clean up any existing area selection state BEFORE injecting
     await chrome.storage.local.remove(['areaSelection']);
 
-    // Initialize selector
-    const [{ result: initResult }] = await chrome.scripting.executeScript({
+    // Inject selector resources - executeScript waits for completion
+    await chrome.scripting.insertCSS({ target: { tabId }, files: ['selector.css'] });
+
+    // Inject the selector class definition
+    await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => {
-        if (typeof window.AreaSelector === 'function') {
-          try {
-            if (window._areaSelector && typeof window._areaSelector.destroy === 'function') {
-              window._areaSelector.destroy();
-            }
-            window._areaSelector = new window.AreaSelector();
-            // Wait a bit for the DOM to be fully updated
-            return new Promise(resolve => {
-              setTimeout(() => {
-                // Check if overlay exists and is ready
-                const overlay = document.querySelector('[id^="sg_overlay_"]');
-                const isReady = overlay && overlay.dataset.sgReady === 'true';
-                resolve({ success: true, ready: isReady });
-              }, 100);
-            });
-          } catch (e) {
-            return { success: false, error: e.message };
-          }
-        } else {
-          return { success: false, error: 'AreaSelector class not found' };
-        }
-      }
+      files: ['selector.js']
     });
 
-    if (!initResult || !initResult.success) {
-      throw new Error(initResult?.error || 'Failed to initialize area selector');
-    }
+    // Delay to allow popup-close synthetic events to fire and be ignored
+    await new Promise(resolve => setTimeout(resolve, 350));
 
-    // Verify the selector is ready
-    if (!initResult.ready) {
-      throw new Error('Area selector overlay is not ready');
-    }
+    // Explicitly instantiate the selector now that the class is defined.
+    // selector.js intentionally does NOT auto-instantiate (it is also a
+    // content script that runs on every page load), so we kick it off here —
+    // only reachable when the user has clicked "Select Area".
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Destroy any stale instance before creating a fresh one
+        if (window._areaSelector && typeof window._areaSelector.destroy === 'function') {
+          try { window._areaSelector.destroy(); } catch (e) {}
+        }
+        window._areaSelector = new window.AreaSelector();
+      }
+    });
 
     // Store the tabId so we know which tab to capture when selection is done
     await chrome.storage.local.set({ activeCaptureTabId: tabId });
 
-    // Only update status to 'selecting' AFTER selector is fully initialized
-    // This ensures the overlay is ready when the popup shows the message
-    await CaptureQueue.updateState({ status: 'selecting', tabId });
+    console.log('[Background] Area selection initialized successfully');
   } catch (error) {
     console.error('[Background] startAreaSelection error:', error);
     // Handle various error types with user-friendly messages
@@ -576,11 +652,17 @@ async function processCapturedImage(dataUrl, tabId) {
     await updateFloatingProgress(tabId, 0, 10, 'Analyzing', 'Initializing...');
 
     const settings = await CaptureQueue.getSettings();
-    const base64Image = dataUrl.split(',')[1];
+    let base64Image = dataUrl.split(',')[1];
 
     if (!base64Image) throw new Error('Invalid image data');
 
-    const result = await analyzeScreenshot(base64Image, settings, tabId);
+    // Resize image if needed to prevent API 413 errors (max 1920px on longest side)
+    // Full-page captures can easily exceed size limits for some APIs
+    base64Image = await resizeImageIfNeeded(base64Image, 1920);
+
+    // Use the new multimodal service which supports redirect mode
+    // The function is imported from ai-service-multimodal.js
+    const result = await analyzeScreenshot(base64Image, settings, tabId, updateFloatingProgress);
 
     // Check if cancelled before updating state
     const state = await CaptureQueue.getState();
@@ -589,53 +671,24 @@ async function processCapturedImage(dataUrl, tabId) {
       return;
     }
 
-    await CaptureQueue.updateState({ status: 'complete', result });
+    await CaptureQueue.updateState({
+      status: 'complete',
+      result,
+      useRedirectMode: settings.useRedirectMode
+    });
     await hideFloatingProgress(tabId);
-    await CaptureQueue.safeTabMessage(tabId, { action: 'showResult', result });
+
+    // Only show result panel if NOT in redirect mode
+    // Redirect mode opens a new tab to the provider, so no result to display
+    if (!settings.useRedirectMode) {
+      await CaptureQueue.safeTabMessage(tabId, { action: 'showResult', result });
+    }
   } catch (error) {
+    console.error('[Background] processCapturedImage error:', error);
+    console.error('[Background] Error stack:', error.stack);
     await CaptureQueue.updateState({ status: 'error', error: error.message });
     await hideFloatingProgress(tabId);
   }
-}
-
-// Analyze screenshot using AI
-async function analyzeScreenshot(base64Image, settings, tabId) {
-  if (!settings.visionApiProvider || !settings.textApiProvider) {
-    throw new Error('API providers not configured.');
-  }
-
-  // Vision OCR
-  let imageDescription;
-  try {
-    await updateFloatingProgress(tabId, 1, 33, 'Analyzing', 'Vision Analysis');
-    imageDescription = await AIService.describeImage(base64Image, settings, (chunk, totalChars) => {
-      updateFloatingProgress(tabId, 1, 33 + (totalChars / 1000) * 10, 'Analyzing', `${totalChars.toLocaleString()} chars`);
-    });
-  } catch (visionError) {
-    throw new Error(`Vision analysis failed: ${visionError.message}`);
-  }
-
-  imageDescription = sanitizeSensitiveData(imageDescription);
-
-  // Check if cancelled before text analysis
-  const state = await CaptureQueue.getState();
-  if (state?.status === 'cancelled') {
-    throw new Error('Capture cancelled');
-  }
-
-  // Text Analysis
-  let deepAnalysis;
-  try {
-    await updateFloatingProgress(tabId, 2, 66, 'Analyzing', 'Deep Analysis');
-    deepAnalysis = await AIService.analyzeText(imageDescription, settings, (chunk, totalChars) => {
-      updateFloatingProgress(tabId, 2, 66 + (totalChars / 1000) * 15, 'Analyzing', `${totalChars.toLocaleString()} chars`);
-    });
-    deepAnalysis = sanitizeSensitiveData(deepAnalysis);
-  } catch (error) {
-    deepAnalysis = `Analysis unavailable: ${error.message}`;
-  }
-
-  return formatResult(imageDescription, deepAnalysis);
 }
 
 // Capture full page
@@ -727,7 +780,7 @@ async function captureFullPage(tab) {
   const [{ result: stitched }] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: (captures, width, height) => {
-      return new Promise(resolve => {
+      return new Promise(async (resolve) => {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         canvas.width = width;
@@ -737,36 +790,25 @@ async function captureFullPage(tab) {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, width, height);
 
-        let loaded = 0;
-        let currentY = 0;
+        // Load and draw each capture at its stored y position
+        // This avoids race conditions from async onload callbacks
+        for (const capture of captures) {
+          const img = await new Promise((imgResolve, imgReject) => {
+            const image = new Image();
+            image.onload = () => imgResolve(image);
+            image.onerror = imgReject;
+            image.src = capture.dataUrl;
+          });
 
-        captures.forEach((c) => {
-          const img = new Image();
-          img.onload = () => {
-            // Use actual image dimensions
-            const imgHeight = img.height;
-            const imgWidth = img.width;
+          // Use the stored y position from capture (not a counter)
+          const yPos = capture.y;
+          const remainingHeight = height - yPos;
+          const imgHeight = Math.min(img.height, remainingHeight);
 
-            // Draw at the current Y position
-            ctx.drawImage(img, 0, currentY, imgWidth, imgHeight);
+          ctx.drawImage(img, 0, yPos, width, imgHeight);
+        }
 
-            // Update Y position for next image
-            currentY += imgHeight;
-
-            if (++loaded === captures.length) {
-              // Overlay is already removed by scroll restoration
-              resolve(canvas.toDataURL('image/png'));
-            }
-          };
-          img.onerror = () => {
-            // Continue anyway to avoid hanging
-            if (++loaded === captures.length) {
-              // Overlay is already removed by scroll restoration
-              resolve(canvas.toDataURL('image/png'));
-            }
-          };
-          img.src = c.dataUrl;
-        });
+        resolve(canvas.toDataURL('image/png'));
       });
     },
     args: [captures, width, height]
@@ -774,101 +816,7 @@ async function captureFullPage(tab) {
   return stitched;
 }
 
-// Parse markdown to HTML
-function parseMarkdown(text) {
-  if (!text) return '';
-
-  let html = text;
-
-  // Escape HTML first, but preserve markdown
-  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  // Code blocks (must be before other processing)
-  html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Headers
-  html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
-  html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
-  html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
-  html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^##\s+(.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^#\s+(.+)$/gm, '<h2>$1</h2>');
-
-  // Bold and Italic
-  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
-  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
-  html = html.replace(/_(.+?)_/g, '<em>$1</em>');
-
-  // Tables
-  html = html.replace(/\|(.+)\|/g, (match, content) => {
-    const cells = content.split('|').map(c => c.trim());
-    return '<tr>' + cells.map(c => `<td>${c || ''}</td>`).join('') + '</tr>';
-  });
-
-  // Wrap tables
-  html = html.replace(/(<tr>[\s\S]*?<\/tr>)+/g, (match) => {
-    // Check if it's a separator row (only dashes, colons, pipes)
-    const rows = match.match(/<tr>[\s\S]*?<\/tr>/g) || [];
-    if (rows.length > 0) {
-      // Check if first row is a separator
-      const firstRowText = rows[0].replace(/<[^>]+>/g, '').replace(/[\-:|]/g, '');
-      if (firstRowText.trim().length === 0) {
-        // This is a separator row, skip it
-        return rows.slice(1).join('');
-      }
-    }
-    return '<table>' + match + '</table>';
-  });
-
-  // Horizontal rules
-  html = html.replace(/^---+$/gm, '<hr>');
-  html = html.replace(/^\*\*\*+$/gm, '<hr>');
-
-  // Unordered lists
-  html = html.replace(/^[\*\-]\s+(.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-
-  // Ordered lists
-  html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-  // Only wrap with ol if not already wrapped by ul (basic check)
-  html = html.replace(/(<li>(?:(?!<\/ul>).)*<\/li>\n?)+/g, (match) => {
-    if (!match.includes('<ul>')) {
-      return '<ol>' + match + '</ol>';
-    }
-    return match;
-  });
-
-  // Line breaks (preserve them)
-  html = html.replace(/\n\n/g, '</p><p>');
-  html = html.replace(/\n/g, '<br>');
-
-  // Wrap in paragraphs
-  html = '<div>' + html + '</div>';
-
-  // Clean up empty paragraphs
-  html = html.replace(/<p><\/p>/g, '');
-  html = html.replace(/<p>\s*<\/p>/g, '');
-  html = html.replace(/<p>\s*(<h[1-6]>)/g, '$1');
-  html = html.replace(/(<\/h[1-6]>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<ul>)/g, '$1');
-  html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<ol>)/g, '$1');
-  html = html.replace(/(<\/ol>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<pre>)/g, '$1');
-  html = html.replace(/(<\/pre>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<table>)/g, '$1');
-  html = html.replace(/(<\/table>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<hr>)/g, '$1');
-  html = html.replace(/(<hr>)\s*<\/p>/g, '$1');
-
-  return html;
-}
+// parseMarkdown and sanitizeSensitiveData are now imported from utils.js
 
 // Format result
 function formatResult(description, analysis) {
@@ -920,5 +868,38 @@ async function handleFollowUpQuestion(request, sender) {
   }
 }
 
+// Process follow-up request from storage (works when service worker is suspended)
+async function processFollowUpRequest() {
+  try {
+    const request = await CaptureQueue.getFollowUpRequest();
+    if (!request) return;
+
+    console.log('[Background] Processing follow-up request:', request.id);
+
+    try {
+      const settings = await CaptureQueue.getSettings();
+      const response = await AIService.askFollowUp(
+        request.question,
+        request.conversationHistory,
+        settings
+      );
+
+      // Set the response in storage
+      await CaptureQueue.setFollowUpResponse(response, null);
+
+      console.log('[Background] Follow-up response sent');
+    } catch (error) {
+      console.error('[Background] Follow-up processing error:', error);
+      // Set error response
+      await CaptureQueue.setFollowUpResponse(null, error.message);
+    } finally {
+      // Clear the request
+      await CaptureQueue.clearFollowUpRequest();
+    }
+  } catch (error) {
+    console.error('[Background] Process follow-up request error:', error);
+  }
+}
+
 // Clean up stale state on load
-chrome.storage.local.remove(['captureRequest', 'currentCapture', 'areaSelection', 'activeCaptureTabId']);
+chrome.storage.local.remove(['captureRequest', 'currentCapture', 'areaSelection', 'activeCaptureTabId', 'followUpRequest', 'followUpResponse']);

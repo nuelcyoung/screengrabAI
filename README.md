@@ -7,6 +7,7 @@ Capture screenshots, extract text with OCR, and get AI-powered insights—withou
 ![ScreenGrab AI](https://img.shields.io/badge/Chrome-Extension-green?logo=google-chrome)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Privacy](https://img.shields.io/badge/privacy-Local%20First-brightgreen)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 
 ## ✨ Features
 
@@ -23,7 +24,12 @@ Capture screenshots, extract text with OCR, and get AI-powered insights—withou
 - **Privacy-First Architecture**
   - Run AI models locally via [Ollama](https://ollama.com) — works completely offline
   - No data leaves your device
-  - Optional cloud providers: OpenAI, Anthropic, Google Gemini, Google Cloud Vision
+  - Optional cloud providers: OpenAI, Grok, Google Gemini, Google Cloud Vision
+
+- **Redirect Mode**
+  - Open screenshots directly in ChatGPT or Grok's web interface
+  - Image automatically copied to clipboard
+  - Auto-paste functionality for seamless workflow
 
 - **User-Friendly**
   - Floating capture icon on every page for quick access
@@ -84,6 +90,13 @@ After capturing, you can ask follow-up questions about the content:
 - "Extract all code examples"
 - "Explain this section in simpler terms"
 
+### Redirect Mode
+
+Enable Redirect Mode in Settings to:
+1. Take a screenshot and automatically open ChatGPT or Grok with the image in your clipboard
+2. No API keys required for analysis (provider handles it)
+3. Auto-paste attempts to insert the image into the chat interface
+
 ## ⚙️ Configuration
 
 ### Local AI (Ollama) — Recommended for Privacy
@@ -94,14 +107,14 @@ After capturing, you can ask follow-up questions about the content:
 
 2. **Pull Vision Model** (for OCR)
    ```bash
-   ollama pull qwen2-vl:7b
+   ollama pull qwen3-vl:4b
    # or any other vision model like llava, minicpm-v
    ```
 
 3. **Pull Text Model** (for analysis)
    ```bash
-   ollama pull llama3.2
-   # or mistral, codellama, etc.
+   ollama pull qwen3-coder:480b-cloud
+   # or llama3, mistral, codellama, etc.
    ```
 
 4. **Configure Extension**
@@ -118,13 +131,21 @@ If you prefer cloud-based models, configure these in Settings:
 |----------|----------|-------------|
 | **Google Cloud Vision** | OCR (vision) | [Google Cloud Console](https://console.cloud.google.com) |
 | **OpenAI** | Vision + Text | [platform.openai.com](https://platform.openai.com) |
-| **Anthropic** | Claude (text) | [console.anthropic.com](https://console.anthropic.com) |
+| **Grok** | Vision + Text | [console.x.ai](https://console.x.ai) |
 | **Google Gemini** | Vision + Text | [ai.google.dev](https://ai.google.dev) |
 
 **API Keys Security:**
 - All keys are stored locally on your device
 - Keys are never sent to any server other than the respective AI provider
 - No data is routed through third-party intermediaries
+
+### Redirect Mode Setup
+
+1. Enable "Redirect Mode" in Settings
+2. Select OpenAI or Grok as your Vision Provider
+3. Take a screenshot - it will open directly in ChatGPT or Grok
+4. The image is automatically copied to your clipboard
+5. Paste it in the chat (or wait for auto-paste)
 
 ## 🔒 Privacy & Security
 
@@ -136,6 +157,7 @@ If you prefer cloud-based models, configure these in Settings:
 ### What Gets Shared
 - **With Ollama (Local)** — Nothing. All processing happens on your machine.
 - **With Cloud Providers** — Only the screenshot image data for analysis. No metadata, tracking, or user identifiers.
+- **With Redirect Mode** — Screenshot is copied to your clipboard and opened in provider's web interface. The App doesn't send any data directly.
 
 ### What Does NOT Get Shared
 - ❌ No analytics or tracking
@@ -154,7 +176,7 @@ If you prefer cloud-based models, configure these in Settings:
 - **AI Integration:**
   - Ollama (local inference)
   - OpenAI API
-  - Anthropic Claude API
+  - Grok API (xAI)
   - Google Gemini API
   - Google Cloud Vision API
 
@@ -168,6 +190,7 @@ screengrab/
 ├── popup.js/html          # Extension popup UI
 ├── options.js/html        # Settings page
 ├── ai-service.js          # AI API client
+├── ai-service-multimodal.js  # Multimodal + redirect mode
 ├── capture-queue.js       # Capture state management
 ├── selector.js            # Area selection UI
 ├── result-display.js      # Results display component
@@ -182,6 +205,18 @@ screengrab/
 2. Test all capture modes and AI providers
 3. Package the extension folder
 4. Submit to Chrome Web Store
+
+## 🔄 Version History
+
+### Version 2.0.0 (March 2026)
+- **Added:** Grok (xAI) provider support
+- **Removed:** Anthropic (Claude) provider
+- **Fixed:** Redirect mode no longer shows Analysis Result panel
+- **Improved:** Auto-paste functionality for Grok
+- **Changed:** Default redirect provider to use selected API provider
+
+### Version 1.1.0
+- Initial public release
 
 ## 🤝 Contributing
 
@@ -213,8 +248,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Contact
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/screengrab/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/screengrab/discussions)
+- **Issues:** [GitHub Issues](https://github.com/nuelcyoung/screengrab/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/nuelcyoung/screengrab/discussions)
 
 ---
 

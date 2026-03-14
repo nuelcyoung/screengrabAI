@@ -4,37 +4,15 @@ let currentMode = 'visible';
 console.log('[Popup] Popup script loaded');
 
 // Wrapper for chrome.runtime.sendMessage with timeout and retry
-async function sendMessageWithRetry(message, timeout = 5000, maxRetries = 3) {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const response = await Promise.race([
-        chrome.runtime.sendMessage(message),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Message timeout')), timeout)
-        )
-      ]);
-
-      return response;
-
-    } catch (error) {
-      // If this was the last attempt, throw the error
-      if (attempt === maxRetries - 1) {
-        throw new Error(`Failed after ${maxRetries} attempts: ${error.message}`);
-      }
-
-      // Wait before retrying with exponential backoff
-      const backoffDelay = Math.min(100 * Math.pow(2, attempt), 1000);
-      await new Promise(resolve => setTimeout(resolve, backoffDelay));
-    }
-  }
-}
-
 // Settings
 let settings = {
   visionApiProvider: 'ollama',
   textApiProvider: 'ollama',
   ollamaApiKey: '',
   googleApiKey: '',
+  openaiApiKey: '',
+  grokApiKey: '',
+  geminiApiKey: '',
   visionModel: 'qwen3-vl:4b',
   textModel: 'qwen3-coder:480b-cloud',
   floatingIconEnabled: true
@@ -84,7 +62,7 @@ async function loadSettings() {
     'ollamaApiKey',
     'googleApiKey',
     'openaiApiKey',
-    'anthropicApiKey',
+    'grokApiKey',
     'geminiApiKey'
   ]);
   const storedSettings = stored.screengrabSettings || {};
@@ -95,11 +73,18 @@ async function loadSettings() {
     ollamaApiKey: stored.ollamaApiKey || '',
     googleApiKey: stored.googleApiKey || '',
     openaiApiKey: stored.openaiApiKey || '',
-    anthropicApiKey: stored.anthropicApiKey || '',
+    grokApiKey: stored.grokApiKey || '',
     geminiApiKey: stored.geminiApiKey || '',
     visionModel: storedSettings.visionModel || 'qwen3-vl:4b',
     textModel: storedSettings.textModel || 'qwen3-coder:480b-cloud',
-    floatingIconEnabled: storedSettings.floatingIconEnabled !== false
+    floatingIconEnabled: storedSettings.floatingIconEnabled !== false,
+    useRedirectMode: storedSettings.useRedirectMode || false,
+    // Unified multimodal model settings (for single-step analysis)
+    useUnifiedModel: storedSettings.useUnifiedModel || false,
+    unifiedApiProvider: storedSettings.unifiedApiProvider || '',
+    unifiedModel: storedSettings.unifiedModel || '',
+    // Capture goal/prompt
+    captureGoal: storedSettings.captureGoal || ''
   };
 
 }
@@ -126,36 +111,24 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
     currentMode = selectedMode;
 
     // Immediately start area selection when clicking Select Area mode
+    // Then close the popup so it doesn't interfere with the selection
     if (selectedMode === 'area') {
       console.log('[Popup] Area mode selected, starting selection...');
 
-      const button = document.getElementById('capture');
-      const loading = document.getElementById('loading');
-      const loadingStep = document.getElementById('loading-step');
-      const loadingText = document.getElementById('loading-text');
-      const result = document.getElementById('result');
-      const resultContent = document.getElementById('result-content');
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      console.log('[Popup] Elements found:', {
-        button: !!button,
-        loading: !!loading,
-        loadingStep: !!loadingStep,
-        loadingText: !!loadingText,
-        result: !!result,
-        resultContent: !!resultContent
+      // Enqueue the area selection request
+      await CaptureQueue.enqueue({
+        mode: 'area',
+        url: tab.url,
+        tabId: tab.id
       });
 
-      button.disabled = true;
-      loading.classList.add('visible');
-      result.classList.remove('visible');
-      resultContent.textContent = '';
-      loadingText.textContent = 'Area Selection';
-      loadingStep.textContent = 'Select an area on the page...';
+      // Close the popup immediately so it doesn't capture mouse events
+      window.close();
 
-      console.log('[Popup] Loading classes:', loading.className);
-      console.log('[Popup] Loading display:', window.getComputedStyle(loading).display);
-
-      await startAreaSelection();
+      // The background.js will handle the rest and show the floating progress
+      return;
     }
   });
 });
@@ -197,56 +170,12 @@ document.getElementById('capture').addEventListener('click', async () => {
   console.log('[Popup] Loading classes:', loading.className);
   console.log('[Popup] Loading computed display:', window.getComputedStyle(loading).display);
 
-  if (currentMode === 'area') {
-    // For area selection, use background.js flow but keep popup open
-    await startAreaSelection();
-    return;
-  }
-
-  try {
-    let screenshotData;
-    const loadingText = document.getElementById('loading-text');
-
-    if (currentMode === 'visible') {
-      loadingText.textContent = 'Capturing';
-      updateProgress(0, 3, 15);
-      if (loadingStep) loadingStep.textContent = 'Capturing visible area...';
-      // Force a UI update before async operation
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      screenshotData = await captureVisibleTab();
-    } else if (currentMode === 'full') {
-      loadingText.textContent = 'Capturing';
-      updateProgress(0, 3, 15);
-      if (loadingStep) loadingStep.textContent = 'Capturing full page...';
-      // Force a UI update before async operation
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      screenshotData = await captureFullPage();
-    }
-
-    if (screenshotData) {
-      loadingText.textContent = 'Analyzing';
-      // Ensure loading is visible
-      if (!loading.classList.contains('visible')) {
-        loading.classList.add('visible');
-      }
-      const imageDescription = await describeImage(screenshotData);
-
-      // Ensure loading is still visible
-      if (!loading.classList.contains('visible')) {
-        loading.classList.add('visible');
-      }
-      const deepAnalysis = await analyzeWithTextModel(imageDescription);
-
-      resultContent.innerHTML = formatResult(imageDescription, deepAnalysis);
-      result.classList.add('visible');
-    }
-  } catch (error) {
-    resultContent.innerHTML = `<div class="error">${error.message}</div>`;
-    result.classList.add('visible');
-  } finally {
-    button.disabled = false;
-    loading.classList.remove('visible');
-  }
+  // Use CaptureQueue for ALL capture modes (consistent with floating icon)
+  // This ensures:
+  // - Single source of truth for capture logic (background.js)
+  // - Popup can close safely during analysis
+  // - Proper error handling and state management
+  await startCapture(currentMode);
 });
 
 // Cancel button handler
@@ -273,7 +202,8 @@ document.getElementById('cancel-capture').addEventListener('click', async () => 
   resultContent.textContent = '';
 });
 
-async function startAreaSelection() {
+// Start capture using CaptureQueue (works for all modes: visible, full, area)
+async function startCapture(mode) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const loadingStep = document.getElementById('loading-step');
   const loading = document.getElementById('loading');
@@ -288,20 +218,18 @@ async function startAreaSelection() {
 
   // Enqueue request via CaptureQueue (same as floating icon)
   await CaptureQueue.enqueue({
-    mode: 'area',
+    mode: mode,
     url: tab.url,
     tabId: tab.id
   });
 
   // Poll for result using same pattern as floating icon
-  await pollForAreaResult(loadingStep);
-
-  // Don't close popup - result is displayed inline like other modes
+  await pollForCaptureResult(loadingStep);
 }
 
-// Poll for area selection result (when popup is used)
-async function pollForAreaResult(loadingStep) {
-  console.log('[Popup] Starting pollForAreaResult');
+// Poll for capture result (when popup is used)
+async function pollForCaptureResult(loadingStep) {
+  console.log('[Popup] Starting pollForCaptureResult');
 
   const maxWait = 120000; // 2 minutes for full analysis
   const pollInterval = 500;
@@ -334,8 +262,8 @@ async function pollForAreaResult(loadingStep) {
 
       if (state.status === 'capturing') {
         console.log('[Popup] Status: capturing');
-        loadingText.textContent = 'Initializing...';
-        loadingStep.textContent = 'Please wait...';
+        loadingText.textContent = 'Capturing...';
+        loadingStep.textContent = 'Capturing screenshot...';
       } else if (state.status === 'selecting') {
         console.log('[Popup] Status: selecting');
         loadingText.textContent = 'Area Selection';
@@ -343,14 +271,14 @@ async function pollForAreaResult(loadingStep) {
       } else if (state.status === 'processing') {
         console.log('[Popup] Status: processing');
         loadingText.textContent = 'Processing';
-        loadingStep.textContent = 'Processing captured area...';
+        loadingStep.textContent = 'Processing screenshot...';
       } else if (state.status === 'analyzing') {
         console.log('[Popup] Status: analyzing');
         loadingText.textContent = 'Analyzing';
         loadingStep.textContent = 'AI Analysis in progress...';
       } else if (state.status === 'complete' && state.result) {
         console.log('[Popup] Status: complete');
-        // Show result in popup (same as visible/full page modes)
+        // Show result in popup
         resultContent.innerHTML = state.result;
         result.classList.add('visible');
         loading.classList.remove('visible');
@@ -378,266 +306,23 @@ async function pollForAreaResult(loadingStep) {
     elapsed += pollInterval;
   }
 
-  console.log('[Popup] Polling timed out');
-  resultContent.innerHTML = `<div class="error">Operation timed out. Please try again.</div>`;
+  // Timeout
+  console.error('[Popup] Poll timeout');
+  resultContent.innerHTML = '<div class="error">Capture timed out. Please try again.</div>';
   result.classList.add('visible');
   loading.classList.remove('visible');
   button.disabled = false;
   await CaptureQueue.reset();
 }
 
-// Show result on-page using result-display component
-async function showResultOnPage(tabId, resultHtml) {
-  try {
-    // Inject result display CSS and JS
-    await chrome.scripting.insertCSS({
-      target: { tabId },
-      files: ['result-display.css']
-    });
-
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['result-display.js']
-    });
-
-    // Create and show result display on the page
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (html) => {
-        if (window._screengrabResultDisplay) {
-          window._screengrabResultDisplay.destroy();
-        }
-        window._screengrabResultDisplay = new window.ResultDisplay();
-        window._screengrabResultDisplay.showResult(html);
-      },
-      args: [resultHtml]
-    });
-
-  } catch (error) {
-    // Failed to show result on-page
-  }
-}
-
+// parseMarkdown, escapeHtml, and sanitizeSensitiveData are now imported from utils.js
 function formatResult(description, analysis) {
   const descHtml = parseMarkdown(description);
   const analysisHtml = parseMarkdown(analysis);
   return `${descHtml}${analysisHtml}`;
 }
 
-// Parse markdown to HTML
-function parseMarkdown(text) {
-  if (!text) return '';
-
-  let html = text;
-
-  // Escape HTML first, but preserve markdown
-  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  // Code blocks (must be before other processing)
-  html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Headers
-  html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
-  html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
-  html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
-  html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^##\s+(.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^#\s+(.+)$/gm, '<h2>$1</h2>');
-
-  // Bold and Italic
-  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-  // Tables
-  html = html.replace(/\|(.+)\|/g, (match, content) => {
-    const cells = content.split('|').map(c => c.trim());
-    return '<tr>' + cells.map(c => `<td>${c || ''}</td>`).join('') + '</tr>';
-  });
-
-  // Wrap tables
-  html = html.replace(/(<tr>[\s\S]*?<\/tr>)+/g, (match) => {
-    return '<table>' + match + '</table>';
-  });
-
-  // Horizontal rules
-  html = html.replace(/^---+$/gm, '<hr>');
-
-  // Unordered lists
-  html = html.replace(/^[\*\-]\s+(.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-
-  // Line breaks (preserve them)
-  html = html.replace(/\n\n/g, '</p><p>');
-  html = html.replace(/\n/g, '<br>');
-
-  // Wrap in paragraphs
-  html = '<div>' + html + '</div>';
-
-  // Clean up empty paragraphs
-  html = html.replace(/<p><\/p>/g, '');
-  html = html.replace(/<p>\s*<\/p>/g, '');
-  html = html.replace(/<p>\s*(<h[1-6]>)/g, '$1');
-  html = html.replace(/(<\/h[1-6]>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<ul>)/g, '$1');
-  html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<table>)/g, '$1');
-  html = html.replace(/(<\/table>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<pre>)/g, '$1');
-  html = html.replace(/(<\/pre>)\s*<\/p>/g, '$1');
-
-  return html;
-}
-
-// Health sector privacy: Sanitize and protect sensitive data
-// Optional privacy feature: Sanitize sensitive data patterns
-function sanitizeSensitiveData(data) {
-  if (typeof data === 'string') {
-    // Only redact obvious SSN patterns
-    data = data.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED_SSN]');
-  }
-  return data;
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-async function captureVisibleTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-  return dataUrl.split(',')[1];
-}
-
-async function captureFullPage() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-  // Get page dimensions
-  const [{ result: pageInfo }] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: () => {
-      const scrollHeight = Math.max(
-        document.body.scrollHeight,
-        document.documentElement.scrollHeight
-      );
-      const viewportHeight = window.innerHeight;
-      const viewportWidth = window.innerWidth;
-      const originalScrollX = window.scrollX;
-      const originalScrollY = window.scrollY;
-      return { scrollHeight, viewportHeight, viewportWidth, originalScrollX, originalScrollY };
-    }
-  });
-
-  const { scrollHeight, viewportHeight, viewportWidth, originalScrollX, originalScrollY } = pageInfo;
-  const captures = [];
-  const numCaptures = Math.ceil(scrollHeight / viewportHeight);
-
-  for (let i = 0; i < numCaptures; i++) {
-    const scrollY = Math.min(i * viewportHeight, scrollHeight - viewportHeight);
-
-    // Hide page content during scroll (show overlay)
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: (y) => {
-        // Create/show overlay if not exists
-        let overlay = document.getElementById('screengrab-capture-overlay');
-        if (!overlay) {
-          overlay = document.createElement('div');
-          overlay.id = 'screengrab-capture-overlay';
-          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:white;z-index:2147483647;pointer-events:none;display:none;';
-          document.documentElement.appendChild(overlay);
-        }
-        overlay.style.display = 'block';
-        window.scrollTo(0, y);
-      },
-      args: [scrollY]
-    });
-
-    await new Promise(resolve => setTimeout(resolve, 30));
-
-    // Hide overlay and wait for repaint before capture
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: async () => {
-        const overlay = document.getElementById('screengrab-capture-overlay');
-        if (overlay) overlay.style.display = 'none';
-        // Wait for browser repaint
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        await new Promise(resolve => setTimeout(resolve, 50));
-        await new Promise(resolve => requestAnimationFrame(resolve));
-      }
-    });
-
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-    captures.push({ dataUrl, y: scrollY });
-  }
-
-  // Restore scroll and remove overlay (hidden by overlay)
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: (x, y) => {
-      // Show overlay first to hide the scroll
-      let overlay = document.getElementById('screengrab-capture-overlay');
-      if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = 'screengrab-capture-overlay';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:white;z-index:2147483647;pointer-events:none;display:block;';
-        document.documentElement.appendChild(overlay);
-      } else {
-        overlay.style.display = 'block';
-      }
-
-      // Scroll while overlay is visible
-      window.scrollTo(x, y);
-
-      // Remove overlay after a brief delay to ensure scroll completes
-      setTimeout(() => {
-        if (overlay && overlay.parentNode) {
-          overlay.remove();
-        }
-      }, 100);
-    },
-    args: [originalScrollX, originalScrollY]
-  });
-
-  const stitchedDataUrl = await stitchImages(captures, viewportWidth, scrollHeight, viewportHeight);
-  return stitchedDataUrl.split(',')[1];
-}
-
-async function stitchImages(captures, width, totalHeight, viewportHeight) {
-  // Process locally using canvas - no messaging needed
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-
-  // Set canvas dimensions
-  canvas.width = width;
-  canvas.height = totalHeight;
-
-  // Load and draw each capture
-  for (const capture of captures) {
-    const img = await loadImage(capture.dataUrl);
-    const yPos = capture.y;
-
-    // Calculate how much of this capture to use
-    const remainingHeight = totalHeight - yPos;
-    const captureHeight = Math.min(viewportHeight, remainingHeight);
-
-    ctx.drawImage(
-      img,
-      0, 0, img.width, captureHeight * (img.width / width),  // Source
-      0, yPos, width, captureHeight                           // Destination
-    );
-  }
-
-  return canvas.toDataURL('image/png');
-}
-
-// Helper to load image from data URL
+// Helper to load image from data URL (used by cropImage for area selection)
 function loadImage(dataUrl) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -648,7 +333,7 @@ function loadImage(dataUrl) {
 }
 
 async function cropImage(dataUrl, selection, devicePixelRatio) {
-  // Process locally using canvas - no messaging needed
+  // Process locally using canvas - used by area selection
   const img = await loadImage(dataUrl);
 
   const canvas = document.createElement('canvas');
@@ -711,90 +396,33 @@ function updateProgress(step, totalSteps, percent) {
   return { loadingStep, loadingStats };
 }
 
-async function describeImage(base64Image) {
-  const { loadingStep, loadingStats } = updateProgress(1, 3, 33);
-
-  // Resize image if too large (max 1920px on longest side)
-  const resizedImage = await resizeImageIfNeeded(base64Image, 1920);
-
-  try {
-    const result = await AIService.describeImage(resizedImage, settings, (chunk, totalChars) => {
-      if (loadingStep) {
-        loadingStep.textContent = 'Vision Analysis';
-      }
-      if (loadingStats) {
-        loadingStats.textContent = `${totalChars.toLocaleString()} chars processed`;
-      }
-    });
-    return result;
-  } catch (error) {
-    throw error;
-  }
-}
-
-async function resizeImageIfNeeded(base64Image, maxSize) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const { width, height } = img;
-
-      // Check if resize needed
-      if (width <= maxSize && height <= maxSize) {
-        resolve(base64Image);
-        return;
-      }
-
-      // Calculate new dimensions
-      const ratio = Math.min(maxSize / width, maxSize / height);
-      const newWidth = Math.round(width * ratio);
-      const newHeight = Math.round(height * ratio);
-
-      // Resize using canvas
-      const canvas = document.createElement('canvas');
-      canvas.width = newWidth;
-      canvas.height = newHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, newWidth, newHeight);
-
-      // Return resized base64 (without data:image/png;base64, prefix)
-      const resized = canvas.toDataURL('image/png').split(',')[1];
-      resolve(resized);
-    };
-    img.src = 'data:image/png;base64,' + base64Image;
-  });
-}
-
-async function analyzeWithTextModel(imageDescription) {
-  const { loadingStep, loadingStats } = updateProgress(2, 3, 66);
-
-  try {
-    const result = await AIService.analyzeText(imageDescription, settings, (chunk, totalChars) => {
-      if (loadingStep) {
-        loadingStep.textContent = 'Deep Analysis';
-      }
-      if (loadingStats) {
-        loadingStats.textContent = `${totalChars.toLocaleString()} chars processed`;
-      }
-    });
-
-    // Mark as complete
-    updateProgress(3, 3, 100);
-
-    return result;
-  } catch (error) {
-    throw error;
-  }
-}
-
-// Cleanup when popup closes to cancel any in-progress captures
+// Cleanup when popup closes
+// IMPORTANT: Do NOT clear captureRequest/currentCapture if they're in active use
+// Only clear them if the capture is still pending (not yet started by background.js)
 window.addEventListener('beforeunload', () => {
-  // Clear any pending capture states
-  chrome.storage.local.remove([
-    'currentCapture',
-    'captureRequest',
-    'areaSelection',
-    'activeCaptureTabId'
-  ]).catch(() => {
-    // Ignore errors during cleanup
+  // Check if there's an active capture before clearing
+  chrome.storage.local.get(['captureRequest', 'currentCapture'], (data) => {
+    const request = data.captureRequest;
+    const state = data.currentCapture;
+
+    // Only clear if:
+    // - No request exists, OR
+    // - Request is still pending (not yet picked up by background.js)
+    const shouldClear = !request ||
+      (request.status === 'pending' && (!state || state.status === 'pending'));
+
+    if (shouldClear) {
+      // Safe to clear - no active capture in progress
+      chrome.storage.local.remove([
+        'currentCapture',
+        'captureRequest',
+        'areaSelection',
+        'activeCaptureTabId'
+      ]).catch(() => {
+        // Ignore errors during cleanup
+      });
+    }
+    // If capture is in progress (processing/selecting/analyzing), DON'T clear
+    // Let background.js handle completion/error
   });
 });

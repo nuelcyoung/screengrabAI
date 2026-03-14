@@ -217,23 +217,53 @@
     // Add cancel button handler
     const cancelBtn = container.querySelector(`#${CANCEL_BTN_ID}`);
     cancelBtn.addEventListener('click', async () => {
+      // Disable button to prevent double-clicks
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = 'Cancelling...';
+
       try {
-        await chrome.runtime.sendMessage({ action: 'cancelCapture' });
+        // Use CaptureQueue for reliable cancellation (works even when service worker is suspended)
+        await CaptureQueue.cancel();
+
+        // Wait a moment for cancellation to take effect
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Successfully cancelled
+        hideProgress();
       } catch (e) {
-        // Ignore if background not available
+        // Cancellation failed - show error and keep progress indicator visible
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = 'Cancel';
+
+        const statusEl = container.querySelector(`#${STATUS_TEXT_ID}`);
+        if (statusEl) {
+          statusEl.textContent = 'Cancel Failed';
+          statusEl.style.color = '#fca5a5';
+        }
+
+        const stepEl = container.querySelector(`#${STEP_TEXT_ID}`);
+        if (stepEl) {
+          stepEl.textContent = 'Close this tab to stop the capture';
+        }
+
+        // Add retry button click handler
+        cancelBtn.addEventListener('click', async () => {
+          hideProgress();
+        }, { once: true });
+
+        console.error('[Progress Indicator] Cancel failed:', e);
       }
-      hideProgress();
     });
   }
 
   // Show the progress indicator
-  function showProgress() {
+  async function showProgress() {
     createProgressIndicator();
     if (container) {
       container.classList.add('visible');
       isVisible = true;
-      // Reset state
-      updateProgress(0, 0);
+      // Reset state - await to ensure initial state is set before showing
+      await updateProgress(0, 0);
     }
   }
 
@@ -252,8 +282,32 @@
     }
   }
 
+  // Get step labels based on analysis mode
+  async function getStepLabels() {
+    try {
+      const result = await chrome.storage.local.get('screengrabSettings');
+      const settings = result.screengrabSettings || {};
+
+      // Redirect mode: Single step (opens provider website)
+      if (settings.useRedirectMode) {
+        return ['Initializing...', 'Opening AI Provider', 'Complete'];
+      }
+
+      // Unified multimodal mode: Single step (one API call)
+      if (settings.useUnifiedModel && settings.unifiedApiProvider && settings.unifiedModel) {
+        return ['Initializing...', 'Analyzing', 'Complete'];
+      }
+
+      // Dual-model mode: Two steps (vision analysis + text analysis)
+      return ['Initializing...', 'Vision Analysis', 'Deep Analysis', 'Complete'];
+    } catch (error) {
+      // Fallback to dual-model labels if storage fails
+      return ['Initializing...', 'Vision Analysis', 'Deep Analysis', 'Complete'];
+    }
+  }
+
   // Update progress
-  function updateProgress(step, percent, statusText, statsText) {
+  async function updateProgress(step, percent, statusText, statsText) {
     if (!container) return;
 
     // Update progress bar
@@ -268,11 +322,38 @@
       statusEl.textContent = statusText;
     }
 
+    // Get step labels based on analysis mode
+    const steps = await getStepLabels();
+    const totalSteps = steps.length - 1; // Subtract 1 for the 'Complete' step
+
     // Update step text
     const stepEl = container.querySelector(`#${STEP_TEXT_ID}`);
     if (stepEl) {
-      const steps = ['Initializing...', 'Vision Analysis', 'Deep Analysis', 'Complete'];
       stepEl.textContent = steps[step] || steps[0];
+
+      // Hide unused step dots for single-step modes (redirect and unified)
+      for (let i = 1; i <= 3; i++) {
+        const dot = container.querySelector(`#${CONTAINER_ID}_step${i}`);
+        const line = container.querySelector(`#${CONTAINER_ID}_line${i}`);
+
+        if (dot) {
+          // Hide dots beyond the total steps
+          if (i > totalSteps) {
+            dot.style.display = 'none';
+          } else {
+            dot.style.display = '';
+          }
+        }
+
+        if (line) {
+          // Hide lines beyond the total steps
+          if (i > totalSteps - 1) {
+            line.style.display = 'none';
+          } else {
+            line.style.display = '';
+          }
+        }
+      }
     }
 
     // Update stats text
@@ -281,8 +362,8 @@
       statsEl.textContent = statsText;
     }
 
-    // Update step dots
-    for (let i = 1; i <= 3; i++) {
+    // Update step dots based on mode and current step
+    for (let i = 1; i <= totalSteps; i++) {
       const dot = container.querySelector(`#${CONTAINER_ID}_step${i}`);
       const line = container.querySelector(`#${CONTAINER_ID}_line${i}`);
 
@@ -295,7 +376,7 @@
         }
       }
 
-      if (line) {
+      if (line && i < totalSteps) {
         line.classList.remove('completed');
         if (i < step) {
           line.classList.add('completed');
@@ -307,8 +388,8 @@
   // Listen for messages from background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'showProgress') {
-      showProgress();
-      sendResponse({ success: true });
+      showProgress().then(() => sendResponse({ success: true }));
+      return true; // Keep channel open for async response
     } else if (message.action === 'hideProgress') {
       hideProgress();
       sendResponse({ success: true });
@@ -318,8 +399,8 @@
         message.percent || 0,
         message.status,
         message.stats
-      );
-      sendResponse({ success: true });
+      ).then(() => sendResponse({ success: true }));
+      return true; // Keep channel open for async response
     }
     return true;
   });

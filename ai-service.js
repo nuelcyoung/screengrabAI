@@ -9,13 +9,28 @@
 
 const AIService = {
     // LLM Providers
+    // Note: These IDs must match ai-service-multimodal.js PROVIDERS
     PROVIDERS: {
-        OLLAMA_LOCAL: 'ollama',
-        OLLAMA_CLOUD: 'ollama-cloud',
+        OLLAMA_LOCAL: 'ollama_local',         // Changed from 'ollama' for consistency
+        OLLAMA_CLOUD: 'ollama_cloud',         // Changed from 'ollama-cloud' for consistency
         GOOGLE_VISION: 'google-vision',
         OPENAI: 'openai',
-        ANTHROPIC: 'anthropic',
+        GROK: 'grok',
         GOOGLE_GEMINI: 'google-gemini'
+    },
+
+    // Legacy provider ID mappings for backward compatibility
+    // Maps old IDs to new standardized IDs
+    PROVIDER_ALIASES: {
+        'ollama': 'ollama_local',
+        'ollama-cloud': 'ollama_cloud'
+    },
+
+    /**
+     * Normalize provider ID to handle legacy aliases
+     */
+    normalizeProviderId(provider) {
+        return this.PROVIDER_ALIASES[provider] || provider;
     },
 
     // API endpoints
@@ -24,14 +39,48 @@ const AIService = {
         cloud: 'https://ollama.com',
         googleVision: 'https://vision.googleapis.com/v1',
         openai: 'https://api.openai.com/v1',
-        anthropic: 'https://api.anthropic.com/v1',
+        grok: 'https://api.x.ai/v1',
         googleGemini: 'https://generativelanguage.googleapis.com/v1beta'
     },
 
-    // Model Cache
+    // Model Cache - uses chrome.storage.session to persist across service worker restarts
     CACHE: {
-        models: {},
-        expiry: {}
+        async get(key) {
+            try {
+                const result = await chrome.storage.session.get(key);
+                return result[key];
+            } catch {
+                return undefined;
+            }
+        },
+        async set(key, value, ttlMs) {
+            try {
+                const expiry = Date.now() + ttlMs;
+                await chrome.storage.session.set({ [key]: { value, expiry } });
+            } catch {
+                // Silently fail if storage.session unavailable
+            }
+        },
+        async getModels(cacheKey) {
+            try {
+                const result = await chrome.storage.session.get(cacheKey);
+                const cached = result[cacheKey];
+                if (cached && cached.expiry > Date.now()) {
+                    return cached.value;
+                }
+                return undefined;
+            } catch {
+                return undefined;
+            }
+        },
+        async setModels(cacheKey, models, ttlMs = 3600000) {
+            try {
+                const expiry = Date.now() + ttlMs;
+                await chrome.storage.session.set({ [cacheKey]: { value: models, expiry } });
+            } catch {
+                // Silently fail if storage.session unavailable
+            }
+        }
     },
 
     // Timeout for API calls (2 minutes)
@@ -44,7 +93,7 @@ const AIService = {
         if (provider === this.PROVIDERS.OLLAMA_CLOUD) return this.ENDPOINTS.cloud;
         if (provider === this.PROVIDERS.GOOGLE_VISION) return this.ENDPOINTS.googleVision;
         if (provider === this.PROVIDERS.OPENAI) return this.ENDPOINTS.openai;
-        if (provider === this.PROVIDERS.ANTHROPIC) return this.ENDPOINTS.anthropic;
+        if (provider === this.PROVIDERS.GROK) return this.ENDPOINTS.grok;
         if (provider === this.PROVIDERS.GOOGLE_GEMINI) return this.ENDPOINTS.googleGemini;
         return this.ENDPOINTS.local;
     },
@@ -53,18 +102,21 @@ const AIService = {
      * Get available models from the provider
      */
     async getModels(provider, apiKey) {
+        // Normalize provider ID to handle legacy aliases
+        provider = this.normalizeProviderId(provider);
+
         const cacheKey = `${provider}-${apiKey || 'no-key'}`;
-        const now = Date.now();
 
         // Return cached models if valid (1 hour cache)
-        if (this.CACHE.models[cacheKey] && this.CACHE.expiry[cacheKey] > now) {
-            return this.CACHE.models[cacheKey];
+        const cachedModels = await this.CACHE.getModels(cacheKey);
+        if (cachedModels) {
+            return cachedModels;
         }
 
         let models = [];
         if (
             (provider === this.PROVIDERS.OPENAI ||
-                provider === this.PROVIDERS.ANTHROPIC ||
+                provider === this.PROVIDERS.GROK ||
                 provider === this.PROVIDERS.GOOGLE_GEMINI ||
                 provider === this.PROVIDERS.OLLAMA_CLOUD) &&
             !apiKey
@@ -86,18 +138,15 @@ const AIService = {
                 models = data.data
                     .filter(m => m.id.includes('gpt'))
                     .map(m => ({ id: m.id, name: m.id }));
-            } else if (provider === this.PROVIDERS.ANTHROPIC) {
-                const response = await fetch(`${this.ENDPOINTS.anthropic}/models`, {
-                    headers: {
-                        'x-api-key': apiKey,
-                        'anthropic-version': '2023-06-01'
-                    }
+            } else if (provider === this.PROVIDERS.GROK) {
+                const response = await fetch(`${this.ENDPOINTS.grok}/models`, {
+                    headers: { 'Authorization': `Bearer ${apiKey}` }
                 });
-                if (!response.ok) throw new Error('Failed to fetch Anthropic models');
+                if (!response.ok) throw new Error('Failed to fetch Grok models');
                 const data = await response.json();
                 models = data.data
-                    .filter(m => m.id.includes('claude'))
-                    .map(m => ({ id: m.id, name: m.display_name || m.id }));
+                    .filter(m => m.id.includes('grok'))
+                    .map(m => ({ id: m.id, name: m.id }));
             } else if (provider === this.PROVIDERS.GOOGLE_GEMINI) {
                 const response = await fetch(`${this.ENDPOINTS.googleGemini}/models?key=${apiKey}`);
                 if (!response.ok) throw new Error('Failed to fetch Gemini models');
@@ -110,9 +159,8 @@ const AIService = {
                     });
             }
 
-            // Cache results
-            this.CACHE.models[cacheKey] = models;
-            this.CACHE.expiry[cacheKey] = now + 3600000; // 1 hour
+            // Cache results using chrome.storage.session (persists across service worker restarts)
+            await this.CACHE.setModels(cacheKey, models, 3600000); // 1 hour TTL
 
             return models;
         } catch (error) {
@@ -168,48 +216,117 @@ const AIService = {
     },
 
     /**
-     * Categorize models as vision or text models based on name
+     * Categorize models as vision or text models
+     *
+     * For Ollama providers, uses queryOllamaModelIsMultimodal() to query the
+     * running instance directly (accurate for arbitrary local models).
+     *
+     * For cloud providers, uses a synchronous allowlist check.
+     *
+     * @param {Array} models - Array of model objects with id/name properties
+     * @param {string} provider - Provider key (e.g., 'ollama', 'ollama-cloud', 'openai')
+     * @param {string} [baseUrl] - Required for Ollama providers
+     * @param {string} [apiKey] - Optional API key for Ollama cloud
+     * @returns {Promise<{multimodal: Array, textOnly: Array}>}
      */
-    categorizeModels(models) {
+    async categorizeModels(models, provider, baseUrl, apiKey) {
+        // For Ollama providers, use the async query method
+        if (provider === this.PROVIDERS.OLLAMA_LOCAL || provider === this.PROVIDERS.OLLAMA_CLOUD) {
+            // Import MultimodalService for queryOllamaModelIsMultimodal
+            // (it's imported in background.js, check if it's available globally)
+            const hasCapabilityCheck = typeof MultimodalService !== 'undefined' &&
+                typeof MultimodalService.queryOllamaModelIsMultimodal === 'function';
+
+            if (hasCapabilityCheck) {
+                return await MultimodalService.categorizeOllamaModels(models, baseUrl, apiKey);
+            }
+
+            // Fallback to name heuristic if MultimodalService unavailable
+            console.warn('[AIService] MultimodalService not available, using name heuristic for Ollama models');
+            const visionModels = [];
+            const textModels = [];
+
+            for (const model of models) {
+                const name = model.name.toLowerCase();
+                // Vision models typically contain "vl" (vision-language) in their name
+                // Note: This is a fallback - qwen3.5, etc. may be misclassified
+                if (name.includes('vl') || name.includes('vision')) {
+                    visionModels.push(model);
+                } else {
+                    textModels.push(model);
+                }
+            }
+
+            return { multimodal: visionModels, textOnly: textModels };
+        }
+
+        // For cloud providers, use synchronous allowlist
         const visionModels = [];
         const textModels = [];
 
-        models.forEach(model => {
-            const name = model.name.toLowerCase();
-            // Vision models typically contain "vl" (vision-language) in their name
-            if (name.includes('vl') || name.includes('vision')) {
-                visionModels.push(model);
+        for (const model of models) {
+            const id = (model.id || model.name || '').toLowerCase();
+
+            if (provider === this.PROVIDERS.OPENAI) {
+                // OpenAI vision models
+                if (id.includes('gpt-4o') || id.includes('gpt-4-vision') || id.includes('vision')) {
+                    visionModels.push(model);
+                } else {
+                    textModels.push(model);
+                }
+            } else if (provider === this.PROVIDERS.GROK) {
+                // Grok vision models (grok-2-vision and newer)
+                if (id.includes('vision') || id.includes('grok-2-vision')) {
+                    visionModels.push(model);
+                } else {
+                    textModels.push(model);
+                }
+            } else if (provider === this.PROVIDERS.GOOGLE_GEMINI) {
+                // Gemini models (most are multimodal)
+                if (id.includes('gemini')) {
+                    visionModels.push(model);
+                } else {
+                    textModels.push(model);
+                }
             } else {
+                // Unknown provider - use text only as safe default
                 textModels.push(model);
             }
-        });
+        }
 
-        return { visionModels, textModels };
+        return { multimodal: visionModels, textOnly: textModels };
     },
 
     validateRequiredKey(provider, settings) {
-        if (provider === 'openai' && !settings.openaiApiKey) throw new Error('OpenAI API Key is required');
-        if (provider === 'anthropic' && !settings.anthropicApiKey) throw new Error('Anthropic API Key is required');
-        if (provider === 'google-gemini' && !settings.geminiApiKey) throw new Error('Gemini API Key is required');
-        if (provider === 'ollama-cloud' && !settings.ollamaApiKey) throw new Error('Ollama Cloud API Key is required');
-        if (provider === 'google-vision' && !settings.googleApiKey) throw new Error('Google Cloud Vision API Key is required');
+        // Normalize provider ID first
+        const normalizedProvider = this.normalizeProviderId(provider);
+
+        // Skip validation for providers that support redirect mode if it is enabled
+        const isRedirectableWebProvider = ['openai', 'grok'].includes(normalizedProvider);
+        if (settings.useRedirectMode && isRedirectableWebProvider) return;
+
+        if (normalizedProvider === 'openai' && !settings.openaiApiKey) throw new Error('OpenAI API Key is required');
+        if (normalizedProvider === 'grok' && !settings.grokApiKey) throw new Error('Grok API Key is required');
+        if (normalizedProvider === 'google-gemini' && !settings.geminiApiKey) throw new Error('Gemini API Key is required');
+        if (normalizedProvider === 'ollama_cloud' && !settings.ollamaApiKey) throw new Error('Ollama Cloud API Key is required');
+        if (normalizedProvider === 'google-vision' && !settings.googleApiKey) throw new Error('Google Cloud Vision API Key is required');
     },
 
     /**
      * Build headers for API request
      */
     buildHeaders(provider, apiKey) {
+        const normalizedProvider = this.normalizeProviderId(provider);
         const headers = { 'Content-Type': 'application/json' };
-        if (provider === 'ollama-cloud' && apiKey) {
+        if (normalizedProvider === 'ollama_cloud' && apiKey) {
             headers['Authorization'] = `Bearer ${apiKey}`;
-        } else if (provider === 'google-vision' && apiKey) {
+        } else if (normalizedProvider === 'google-vision' && apiKey) {
             headers['Authorization'] = `Bearer ${apiKey}`;
-        } else if (provider === 'openai' && apiKey) {
+        } else if (normalizedProvider === 'openai' && apiKey) {
             headers['Authorization'] = `Bearer ${apiKey}`;
-        } else if (provider === 'anthropic' && apiKey) {
-            headers['x-api-key'] = apiKey;
-            headers['anthropic-version'] = '2023-06-01';
-        } else if (provider === 'google-gemini') {
+        } else if (normalizedProvider === 'grok' && apiKey) {
+            headers['Authorization'] = `Bearer ${apiKey}`;
+        } else if (normalizedProvider === 'google-gemini') {
             // Gemini uses query param for key mostly, but can use header in some contexts
             // We'll handle it in the request construction
         }
@@ -217,50 +334,15 @@ const AIService = {
     },
 
     /**
-     * Process streaming response from Ollama
-     */
-    async processStream(response, onChunk) {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let result = '';
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n').filter(line => line.trim());
-
-            for (const line of lines) {
-                try {
-                    const json = JSON.parse(line);
-                    if (json.response) {
-                        result += json.response;
-                        if (onChunk) onChunk(json.response, result.length);
-                    }
-                    if (json.error) {
-                        throw new Error(json.error);
-                    }
-                } catch (e) {
-                    // Skip JSON parse errors (partial chunks)
-                    if (e.message && !e.message.includes('JSON')) {
-                        throw e;
-                    }
-                }
-            }
-        }
-
-        return result;
-    },
-
-    /**
      * Describe an image using vision model (OCR/text extraction)
      */
     async describeImage(base64Image, settings, onProgress) {
         const { visionApiProvider, visionModel, ...apiKeys } = settings;
-        this.validateRequiredKey(visionApiProvider, settings);
+        // Normalize provider ID for backward compatibility
+        const normalizedProvider = this.normalizeProviderId(visionApiProvider);
+        this.validateRequiredKey(normalizedProvider, settings);
 
-        switch (visionApiProvider) {
+        switch (normalizedProvider) {
             case this.PROVIDERS.OLLAMA_LOCAL:
             case this.PROVIDERS.OLLAMA_CLOUD:
                 return this.describeImageOllama(base64Image, settings, onProgress);
@@ -268,8 +350,8 @@ const AIService = {
                 return this.describeImageGoogleVision(base64Image, settings, onProgress);
             case this.PROVIDERS.OPENAI:
                 return this.describeImageOpenAI(base64Image, settings, onProgress);
-            case this.PROVIDERS.ANTHROPIC:
-                return this.describeImageAnthropic(base64Image, settings, onProgress);
+            case this.PROVIDERS.GROK:
+                return this.describeImageGrok(base64Image, settings, onProgress);
             case this.PROVIDERS.GOOGLE_GEMINI:
                 return this.describeImageGemini(base64Image, settings, onProgress);
             default:
@@ -282,8 +364,9 @@ const AIService = {
      */
     async describeImageOllama(base64Image, settings, onProgress) {
         const { visionApiProvider, visionModel, ollamaApiKey } = settings;
-        const baseUrl = this.getBaseUrl(visionApiProvider);
-        const isCloud = visionApiProvider === 'ollama-cloud';
+        const normalizedProvider = this.normalizeProviderId(visionApiProvider);
+        const baseUrl = this.getBaseUrl(normalizedProvider);
+        const isCloud = normalizedProvider === this.PROVIDERS.OLLAMA_CLOUD;
 
         // Check local availability if using local
         if (!isCloud) {
@@ -342,13 +425,33 @@ const AIService = {
                     const chatData = await chatResponse.json();
                     const content = chatData.choices?.[0]?.message?.content;
 
-                    if (content && !content.includes('/v1/chat/completions') && !content.includes('OpenAI-compatible')) {
-                        if (onProgress) onProgress(content, content.length);
-                        return content;
+                    // Validate that we got a real response, not an error or API documentation
+                    // Some models respond with their own API docs when they don't understand the request
+                    if (content && typeof content === 'string' && content.length > 0) {
+                        // Check for common error responses or API documentation patterns
+                        const errorPatterns = [
+                            '/v1/chat/completions',
+                            'OpenAI-compatible',
+                            'API endpoint',
+                            'POST /v1/',
+                            '{"error":'
+                        ];
+
+                        const hasErrorPattern = errorPatterns.some(pattern => content.includes(pattern));
+
+                        if (!hasErrorPattern) {
+                            // Valid response - return it
+                            if (onProgress) onProgress(content, content.length);
+                            return content;
+                        }
+
+                        // If we hit this, the model likely doesn't support vision via chat completions
+                        console.warn('[AIService] Chat completions API returned unexpected response - model may not support vision. Falling back to generate API.');
                     }
                 }
             } catch (chatError) {
                 // Chat API failed, will fall back to generate API
+                console.warn('[AIService] Chat completions API failed:', chatError.message);
             }
 
             // Fallback to generate API
@@ -472,16 +575,18 @@ const AIService = {
      */
     async analyzeText(text, settings, onProgress) {
         const { textApiProvider, textModel, ...apiKeys } = settings;
-        this.validateRequiredKey(textApiProvider, settings);
+        // Normalize provider ID for backward compatibility
+        const normalizedProvider = this.normalizeProviderId(textApiProvider);
+        this.validateRequiredKey(normalizedProvider, settings);
 
-        switch (textApiProvider) {
+        switch (normalizedProvider) {
             case this.PROVIDERS.OLLAMA_LOCAL:
             case this.PROVIDERS.OLLAMA_CLOUD:
                 return this.analyzeTextOllama(text, settings, onProgress);
             case this.PROVIDERS.OPENAI:
                 return this.analyzeTextOpenAI(text, settings, onProgress);
-            case this.PROVIDERS.ANTHROPIC:
-                return this.analyzeTextAnthropic(text, settings, onProgress);
+            case this.PROVIDERS.GROK:
+                return this.analyzeTextGrok(text, settings, onProgress);
             case this.PROVIDERS.GOOGLE_GEMINI:
                 return this.analyzeTextGemini(text, settings, onProgress);
             default:
@@ -494,8 +599,9 @@ const AIService = {
      */
     async analyzeTextOllama(text, settings, onProgress) {
         const { textApiProvider, textModel, ollamaApiKey } = settings;
-        const baseUrl = this.getBaseUrl(textApiProvider);
-        const headers = this.buildHeaders(textApiProvider, ollamaApiKey);
+        const normalizedProvider = this.normalizeProviderId(textApiProvider);
+        const baseUrl = this.getBaseUrl(normalizedProvider);
+        const headers = this.buildHeaders(normalizedProvider, ollamaApiKey);
 
         const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Text analysis timeout (120s)')), this.TIMEOUT_MS)
@@ -536,16 +642,18 @@ const AIService = {
      */
     async askFollowUp(question, conversationHistory, settings, onProgress) {
         const { textApiProvider, ...apiKeys } = settings;
-        this.validateRequiredKey(textApiProvider, settings);
+        // Normalize provider ID for backward compatibility
+        const normalizedProvider = this.normalizeProviderId(textApiProvider);
+        this.validateRequiredKey(normalizedProvider, settings);
 
-        switch (textApiProvider) {
+        switch (normalizedProvider) {
             case this.PROVIDERS.OLLAMA_LOCAL:
             case this.PROVIDERS.OLLAMA_CLOUD:
                 return this.askFollowUpOllama(question, conversationHistory, settings, onProgress);
             case this.PROVIDERS.OPENAI:
                 return this.askFollowUpOpenAI(question, conversationHistory, settings, onProgress);
-            case this.PROVIDERS.ANTHROPIC:
-                return this.askFollowUpAnthropic(question, conversationHistory, settings, onProgress);
+            case this.PROVIDERS.GROK:
+                return this.askFollowUpGrok(question, conversationHistory, settings, onProgress);
             case this.PROVIDERS.GOOGLE_GEMINI:
                 return this.askFollowUpGemini(question, conversationHistory, settings, onProgress);
             default:
@@ -555,11 +663,12 @@ const AIService = {
 
     async askFollowUpOllama(question, conversationHistory, settings, onProgress) {
         const { textApiProvider, textModel, ollamaApiKey } = settings;
-        const baseUrl = this.getBaseUrl(textApiProvider);
-        const headers = this.buildHeaders(textApiProvider, ollamaApiKey);
+        const normalizedProvider = this.normalizeProviderId(textApiProvider);
+        const baseUrl = this.getBaseUrl(normalizedProvider);
+        const headers = this.buildHeaders(normalizedProvider, ollamaApiKey);
 
         // For local Ollama, check if server is running
-        if (textApiProvider === this.PROVIDERS.OLLAMA_LOCAL) {
+        if (normalizedProvider === this.PROVIDERS.OLLAMA_LOCAL) {
             try {
                 await this.checkLocalHealth();
             } catch (healthError) {
@@ -724,42 +833,31 @@ const AIService = {
         return content;
     },
 
-    // Anthropic Implementations
-    async describeImageAnthropic(base64Image, settings, onProgress) {
-        const { visionModel, anthropicApiKey } = settings;
-        const headers = this.buildHeaders(this.PROVIDERS.ANTHROPIC, anthropicApiKey);
+    // Grok Implementations (xAI API — OpenAI-compatible format)
+    async describeImageGrok(base64Image, settings, onProgress) {
+        const { visionModel, grokApiKey } = settings;
+        const headers = this.buildHeaders(this.PROVIDERS.GROK, grokApiKey);
 
-        // Anthropic expects base64 without prefix
-        let imageContent = base64Image;
-        if (imageContent.startsWith('data:image/')) {
-            imageContent = imageContent.split(',')[1];
+        let imageData = base64Image;
+        if (!imageData.startsWith('data:')) {
+            imageData = `data:image/png;base64,${base64Image}`;
         }
 
         const body = {
-            model: visionModel || "claude-3-5-sonnet-20241022",
-            max_tokens: 4096,
+            model: visionModel || 'grok-2-vision-1212',
             messages: [
                 {
-                    role: "user",
+                    role: 'user',
                     content: [
-                        {
-                            type: "image",
-                            source: {
-                                type: "base64",
-                                media_type: "image/png", // Assuming PNG from capture
-                                data: imageContent
-                            }
-                        },
-                        {
-                            type: "text",
-                            text: "Extract ALL visible text from this image. Return only the extracted text content with no explanations or descriptions."
-                        }
+                        { type: 'text', text: 'Extract ALL visible text from this image. Return only the extracted text content with no explanations or descriptions.' },
+                        { type: 'image_url', image_url: { url: imageData } }
                     ]
                 }
-            ]
+            ],
+            max_tokens: 4096
         };
 
-        const response = await fetch(`${this.ENDPOINTS.anthropic}/messages`, {
+        const response = await fetch(`${this.ENDPOINTS.grok}/chat/completions`, {
             method: 'POST',
             headers,
             body: JSON.stringify(body)
@@ -767,31 +865,29 @@ const AIService = {
 
         if (!response.ok) {
             const err = await response.text();
-            throw new Error(`Anthropic Vision failed: ${err}`);
+            throw new Error(`Grok Vision failed: ${err}`);
         }
 
         const data = await response.json();
-        const content = data.content[0].text;
+        const content = data.choices[0].message.content;
         if (onProgress) onProgress(content, content.length);
         return content;
     },
 
-    async analyzeTextAnthropic(text, settings, onProgress) {
-        const { textModel, anthropicApiKey } = settings;
-        const headers = this.buildHeaders(this.PROVIDERS.ANTHROPIC, anthropicApiKey);
+    async analyzeTextGrok(text, settings, onProgress) {
+        const { textModel, grokApiKey } = settings;
+        const headers = this.buildHeaders(this.PROVIDERS.GROK, grokApiKey);
 
         const body = {
-            model: textModel || "claude-3-5-sonnet-20241022",
-            max_tokens: 4096,
+            model: textModel || 'grok-3-mini',
             messages: [
-                {
-                    role: "user",
-                    content: `Analyze the text extracted from an image:\n\n${text}\n\nUnderstand the context, solve any problems, and provide helpful answers.`
-                }
-            ]
+                { role: 'system', content: 'You are a helpful assistant analyzing text extracted from an image.' },
+                { role: 'user', content: `Analyze the text content:\n\n${text}\n\nUnderstand the context, solve any problems, and provide helpful answers.` }
+            ],
+            max_tokens: 4096
         };
 
-        const response = await fetch(`${this.ENDPOINTS.anthropic}/messages`, {
+        const response = await fetch(`${this.ENDPOINTS.grok}/chat/completions`, {
             method: 'POST',
             headers,
             body: JSON.stringify(body)
@@ -799,36 +895,35 @@ const AIService = {
 
         if (!response.ok) {
             const err = await response.text();
-            throw new Error(`Anthropic Text Analysis failed: ${err}`);
+            throw new Error(`Grok Text Analysis failed: ${err}`);
         }
 
         const data = await response.json();
-        const content = data.content[0].text;
+        const content = data.choices[0].message.content;
         if (onProgress) onProgress(content, content.length);
         return content;
     },
 
-    async askFollowUpAnthropic(question, conversationHistory, settings, onProgress) {
-        const { textModel, anthropicApiKey } = settings;
-        const headers = this.buildHeaders(this.PROVIDERS.ANTHROPIC, anthropicApiKey);
+    async askFollowUpGrok(question, conversationHistory, settings, onProgress) {
+        const { textModel, grokApiKey } = settings;
+        const headers = this.buildHeaders(this.PROVIDERS.GROK, grokApiKey);
 
-        const messages = [];
+        const messages = [
+            { role: 'system', content: 'You are a helpful AI assistant answering questions about a screenshot that was analyzed using OCR. Use the conversation history to understand context.' }
+        ];
+
         conversationHistory.forEach(msg => {
-            messages.push({
-                role: msg.role,
-                content: msg.content
-            });
+            messages.push({ role: msg.role, content: msg.content });
         });
-        messages.push({ role: "user", content: question });
+        messages.push({ role: 'user', content: question });
 
         const body = {
-            model: textModel || "claude-3-5-sonnet-20241022",
-            max_tokens: 4096,
-            messages: messages,
-            system: "You are a helpful AI assistant answering questions about a screenshot that was analyzed using OCR."
+            model: textModel || 'grok-3-mini',
+            messages,
+            max_tokens: 4096
         };
 
-        const response = await fetch(`${this.ENDPOINTS.anthropic}/messages`, {
+        const response = await fetch(`${this.ENDPOINTS.grok}/chat/completions`, {
             method: 'POST',
             headers,
             body: JSON.stringify(body)
@@ -836,11 +931,11 @@ const AIService = {
 
         if (!response.ok) {
             const err = await response.text();
-            throw new Error(`Anthropic Follow-up failed: ${err}`);
+            throw new Error(`Grok Follow-up failed: ${err}`);
         }
 
         const data = await response.json();
-        const content = data.content[0].text;
+        const content = data.choices[0].message.content;
         if (onProgress) onProgress(content, content.length);
         return content;
     },

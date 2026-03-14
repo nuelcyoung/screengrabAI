@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "ScreenGrab AI",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "AI-powered screenshot capture and analysis tool. Extract and analyze text from any webpage.",
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
-    "tabs"
+    "tabs",
+    "notifications",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -29,6 +31,7 @@
       ],
       "js": [
         "utils.js",
+        "capture-queue.js",
         "selector.js",
         "result-display.js",
         "progress-indicator.js",

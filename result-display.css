@@ -105,6 +105,8 @@
   word-break: break-word !important;
   flex: 1 !important;
   min-height: 0 !important;
+  background: rgba(22, 33, 62, 0.95) !important;
+  color: #e4e4e7 !important;
 }
 
 .sg-content h2 {
