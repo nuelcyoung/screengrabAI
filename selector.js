@@ -1,18 +1,7 @@
-// Area Selector - IIFE ensures fresh execution on each injection
+// Area Selector - Direct DOM Approach (No Iframe)
 //
-// COORDINATE SPACE DESIGN:
-// ========================
-// This component stores and returns all selection coordinates in DOCUMENT/PAGE SPACE
-// (also called "page coordinates" or "document coordinates").
+// Simpler approach without iframe coordinate translation issues
 //
-// - Mouse events (e.pageX, e.pageY) are in document space (includes scroll position)
-// - The stored areaSelection object uses document coordinates
-// - background.js expects document coordinates for area selection
-//
-// For visual display, the selection box uses position:fixed, which requires VIEWPORT SPACE.
-// We convert: viewportX = docX - window.scrollX, viewportY = docY - window.scrollY
-//
-// This design ensures consistency with background.js cropping logic.
 (function () {
   'use strict';
 
@@ -22,8 +11,8 @@
   const SELECTION_BOX_ID = 'sg_selection_' + randomSuffix;
   const INSTRUCTIONS_ID = 'sg_instr_' + randomSuffix;
 
-  // Clean up any existing selector elements (from previous injections)
-  document.querySelectorAll('.sg-overlay, .sg-selection-box, .sg-instructions').forEach(el => el.remove());
+  // Clean up any existing selector elements
+  document.querySelectorAll('[id^="sg_overlay_"], [id^="sg_selection_"], [id^="sg_instr_"]').forEach(el => el.remove());
 
   // Destroy any existing selector instance
   if (window._areaSelector && typeof window._areaSelector.destroy === 'function') {
@@ -38,21 +27,19 @@
       this.overlay = null;
       this.selectionBox = null;
       this.instructions = null;
+      this.dimensionsTooltip = null;
       this.destroyed = false;
 
-      // Coordinate space: All selection coordinates are in DOCUMENT/PAGE space
-      // (e.pageX, e.pageY) which include scroll position.
-      // This is what background.js expects for areaSelection.
-      // Visual display converts to viewport space by subtracting window.scrollX/Y.
-      this.docStartX = 0;
-      this.docStartY = 0;
-      this.docCurrentX = 0;
-      this.docCurrentY = 0;
+      // Coordinate space: DOCUMENT/PAGE space
+      this.startX = 0;
+      this.startY = 0;
+      this.currentX = 0;
+      this.currentY = 0;
 
-      // Bind event handlers to preserve 'this' context
-      this.mousedownHandler = this.handleMouseDown.bind(this);
-      this.mousemoveHandler = this.handleMouseMove.bind(this);
-      this.mouseupHandler = this.handleMouseUp.bind(this);
+      // Bind event handlers
+      this.pointerdownHandler = this.handlePointerDown.bind(this);
+      this.pointermoveHandler = this.handlePointerMove.bind(this);
+      this.pointerupHandler = this.handlePointerUp.bind(this);
       this.keydownHandler = this.handleKeyDown.bind(this);
       this.scrollHandler = this.handleScroll.bind(this);
 
@@ -60,52 +47,94 @@
     }
 
     init() {
-      // Create overlay with critical inline styles to ensure it works
+      // Create overlay container
       this.overlay = document.createElement('div');
       this.overlay.id = OVERLAY_ID;
-      this.overlay.className = 'sg-overlay';
-      // Force critical styles inline to override any page CSS
-      this.overlay.style.cssText = 'position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:0!important;background:rgba(0,0,0,0.4)!important;z-index:2147483647!important;cursor:crosshair!important;pointer-events:all!important;visibility:visible!important;display:block!important;';
+      this.overlay.style.cssText = `
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        background: rgba(0, 0, 0, 0.3) !important;
+        z-index: 2147483647 !important;
+        cursor: crosshair !important;
+        pointer-events: all !important;
+        box-sizing: border-box !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      `;
       document.body.appendChild(this.overlay);
 
       // Create selection box
       this.selectionBox = document.createElement('div');
       this.selectionBox.id = SELECTION_BOX_ID;
-      this.selectionBox.className = 'sg-selection-box';
-      this.selectionBox.style.cssText = 'position:fixed!important;border:2px solid #8b5cf6!important;background:rgba(139,92,246,0.1)!important;z-index:2147483648!important;pointer-events:none!important;opacity:0;transition:opacity 0.15s ease!important;box-shadow:0 0 0 9999px rgba(0,0,0,0.5)!important;visibility:visible!important;display:block!important;';
-      document.body.appendChild(this.selectionBox);
+      this.selectionBox.style.cssText = `
+        position: absolute !important;
+        border: 2px solid #8b5cf6 !important;
+        background: rgba(139, 92, 246, 0.1) !important;
+        pointer-events: none !important;
+        box-sizing: border-box !important;
+        display: none !important;
+        box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5) !important;
+      `;
+      this.overlay.appendChild(this.selectionBox);
+
+      // Create dimensions tooltip
+      this.dimensionsTooltip = document.createElement('div');
+      this.dimensionsTooltip.style.cssText = `
+        position: absolute !important;
+        bottom: -30px !important;
+        left: 0 !important;
+        background: rgba(26, 26, 46, 0.95) !important;
+        color: #e4e4e7 !important;
+        padding: 4px 10px !important;
+        border-radius: 6px !important;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        white-space: nowrap !important;
+        pointer-events: none !important;
+        border: 1px solid rgba(139, 92, 246, 0.3) !important;
+      `;
+      this.selectionBox.appendChild(this.dimensionsTooltip);
 
       // Create instructions
       this.instructions = document.createElement('div');
       this.instructions.id = INSTRUCTIONS_ID;
-      this.instructions.className = 'sg-instructions';
-      this.instructions.innerHTML = '<strong>Click and drag to select area</strong> • ESC to cancel';
-      this.instructions.style.cssText = 'position:fixed!important;top:50%!important;left:50%!important;transform:translate(-50%,-50%)!important;background:rgba(26,26,46,0.95)!important;color:#e4e4e7!important;padding:16px 24px!important;border-radius:12px!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif!important;font-size:14px!important;font-weight:500!important;z-index:2147483649!important;pointer-events:none!important;box-shadow:0 8px 32px rgba(0,0,0,0.3)!important;border:1px solid rgba(139,92,246,0.3)!important;transition:opacity 0.15s ease!important;text-align:center!important;max-width:400px!important;visibility:visible!important;display:block!important;';
-      document.body.appendChild(this.instructions);
+      this.instructions.style.cssText = `
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        background: rgba(26, 26, 46, 0.98) !important;
+        color: #e4e4e7 !important;
+        padding: 20px 28px !important;
+        border-radius: 14px !important;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+        font-size: 15px !important;
+        font-weight: 600 !important;
+        z-index: 2147483648 !important;
+        pointer-events: none !important;
+        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(139, 92, 246, 0.3) !important;
+        border: 1px solid rgba(139, 92, 246, 0.4) !important;
+        text-align: center !important;
+        max-width: 420px !important;
+        backdrop-filter: blur(8px) !important;
+      `;
+      this.instructions.innerHTML = '<strong>Click and drag to select area</strong><br><span style="opacity:0.7;font-size:13px;margin-top:8px;display:block;">Press <kbd style="display:inline-block;padding:3px 8px;background:rgba(139,92,246,0.2);border:1px solid rgba(139,92,246,0.4);border-radius:4px;font-family:\'Consolas\',\'Monaco\',monospace;font-size:12px;color:#a78bfa;margin:0 2px;">ESC</kbd> to cancel</span>';
+      this.overlay.appendChild(this.instructions);
 
-      // Setup event listeners - use capture phase for more reliable event handling
-      // Delay mousedown registration by 400ms to avoid phantom clicks from popup close
-      this._mousedownReady = false;
-      setTimeout(() => {
-        this._mousedownReady = true;
-        this.overlay.addEventListener('mousedown', this.mousedownHandler, true);
-      }, 400);
-      document.addEventListener('mousemove', this.mousemoveHandler, true);
-      document.addEventListener('mouseup', this.mouseupHandler, true);
+      // Setup event listeners
+      this.overlay.addEventListener('mousedown', this.pointerdownHandler, true);
+      document.addEventListener('mousemove', this.pointermoveHandler, true);
+      document.addEventListener('mouseup', this.pointerupHandler, true);
       document.addEventListener('keydown', this.keydownHandler, true);
       window.addEventListener('scroll', this.scrollHandler, true);
 
-      // Ensure overlay is on top - force override any page styles
-      this.overlay.style.setProperty('pointer-events', 'all', 'important');
-
-      // Mark as ready for background script to check
-      this.ready = true;
-      this.overlay.dataset.sgReady = 'true';
-
-      // Listen for cleanup signals (e.g., popup closed)
+      // Listen for cleanup signals
       this.storageListener = (changes, areaName) => {
         if (areaName !== 'local') return;
-        // If activeCaptureTabId is removed, cancel the selection
         if (changes.activeCaptureTabId && changes.activeCaptureTabId.newValue === undefined) {
           this.destroy();
         }
@@ -117,65 +146,86 @@
         this.destroy();
       };
       window.addEventListener('beforeunload', this.unloadHandler);
+
+      // Ignore clicks for the first 100ms to prevent accidental selections
+      this._ignorePointerDownUntil = performance.now() + 100;
     }
 
-    handleMouseDown(e) {
-      // Ignore mousedown events during the startup grace period
-      if (!this._mousedownReady) return;
+    handlePointerDown(e) {
+      if (performance.now() < this._ignorePointerDownUntil) return;
+      if (e.button !== 0) return;
+      // Check if click is on overlay or any of its children (selection box, etc.)
+      // Use composedPath to handle shadow DOM events properly
+      const path = e.composedPath ? e.composedPath() : [e.target];
+      const clickedOnOverlay = path.some(el => el === this.overlay);
+      if (!clickedOnOverlay) return;
 
       e.preventDefault();
       e.stopPropagation();
 
       this.isSelecting = true;
 
-      // Store document/page coordinates (include scroll position)
-      // These will be stored in areaSelection for background.js
-      this.docStartX = e.pageX;
-      this.docStartY = e.pageY;
-      this.docCurrentX = e.pageX;
-      this.docCurrentY = e.pageY;
+      // Store starting position in viewport coordinates
+      this.startX = e.clientX;
+      this.startY = e.clientY;
+      this.currentX = e.clientX;
+      this.currentY = e.clientY;
 
-      // Show selection box by setting opacity inline
-      this.selectionBox.style.setProperty('opacity', '1', 'important');
-      this.selectionBox.classList.add('sg-active');
-      this.updateSelectionBoxDisplay();
+      // Show selection box
+      this.selectionBox.style.setProperty('display', 'block', 'important');
+      this.updateSelectionBox();
+
+      // Hide instructions
       this.instructions.style.opacity = '0';
+      this.instructions.style.transform = 'translate(-50%, -50%) scale(0.95)';
     }
 
-    handleMouseMove(e) {
+    handlePointerMove(e) {
       if (!this.isSelecting) return;
 
-      // Update current position in document/page coordinates
-      this.docCurrentX = e.pageX;
-      this.docCurrentY = e.pageY;
-      this.updateSelectionBoxDisplay();
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Update current position
+      this.currentX = e.clientX;
+      this.currentY = e.clientY;
+
+      this.updateSelectionBox();
     }
 
-    handleMouseUp(e) {
+    handlePointerUp(e) {
       if (!this.isSelecting) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
       this.isSelecting = false;
 
-      // Calculate selection dimensions in document/page coordinates
-      const left = Math.min(this.docStartX, this.docCurrentX);
-      const top = Math.min(this.docStartY, this.docCurrentY);
-      const width = Math.abs(this.docCurrentX - this.docStartX);
-      const height = Math.abs(this.docCurrentY - this.docStartY);
+      // Calculate selection in viewport coordinates
+      const viewportLeft = Math.min(this.startX, this.currentX);
+      const viewportTop = Math.min(this.startY, this.currentY);
+      const width = Math.abs(this.currentX - this.startX);
+      const height = Math.abs(this.currentY - this.startY);
 
-      // Check minimum selection size BEFORE destroying
-      // This ensures we can always store a result (even if null for cancellation)
+      // Convert to document coordinates (account for scroll)
+      const scrollX = window.scrollX || document.documentElement.scrollLeft;
+      const scrollY = window.scrollY || document.documentElement.scrollTop;
+
+      const docLeft = viewportLeft + scrollX;
+      const docTop = viewportTop + scrollY;
+
+      // Check minimum selection size
       const meetsMinimumSize = width > 10 && height > 10;
 
-      // Now safe to destroy overlay
+      // Destroy overlay
       this.destroy();
 
-      // Store selection result with error handling
-      // areaSelection is in document/page coordinates (what background.js expects)
+      // Store selection result
       const selectionData = meetsMinimumSize
-        ? { x: left, y: top, width: width, height: height }
+        ? { x: docLeft, y: docTop, width: width, height: height }
         : null;
 
       chrome.storage.local.set({ areaSelection: selectionData }, () => {
-        // Ignore errors - background.js will timeout if storage fails
         if (chrome.runtime.lastError) {
           console.error('[AreaSelector] Failed to store area selection:', chrome.runtime.lastError);
         }
@@ -184,12 +234,9 @@
 
     handleKeyDown(e) {
       if (e.key === 'Escape') {
-        // Cancel selection - destroy overlay first
         this.destroy();
 
-        // Signal cancellation to background.js
         chrome.storage.local.set({ areaSelection: null }, () => {
-          // Ignore errors - background.js will timeout if storage fails
           if (chrome.runtime.lastError) {
             console.error('[AreaSelector] Failed to cancel area selection:', chrome.runtime.lastError);
           }
@@ -199,39 +246,41 @@
 
     handleScroll() {
       if (this.isSelecting) {
-        this.updateSelectionBoxDisplay();
+        // Cancel selection on scroll to avoid coordinate confusion
+        this.destroy();
+        chrome.storage.local.set({ areaSelection: null });
       }
     }
 
-    updateSelectionBoxDisplay() {
-      // Calculate selection in document/page coordinates
-      const docLeft = Math.min(this.docStartX, this.docCurrentX);
-      const docTop = Math.min(this.docStartY, this.docCurrentY);
-      const width = Math.abs(this.docCurrentX - this.docStartX);
-      const height = Math.abs(this.docCurrentY - this.docStartY);
+    updateSelectionBox() {
+      // Calculate selection box in viewport coordinates
+      const left = Math.min(this.startX, this.currentX);
+      const top = Math.min(this.startY, this.currentY);
+      const width = Math.abs(this.currentX - this.startX);
+      const height = Math.abs(this.currentY - this.startY);
 
-      // Convert to viewport coordinates for visual display
-      // (selection box uses position:fixed, which is relative to viewport)
-      const viewportLeft = docLeft - window.scrollX;
-      const viewportTop = docTop - window.scrollY;
-
-      // Use setProperty with 'important' to override inline styles
-      this.selectionBox.style.setProperty('left', viewportLeft + 'px', 'important');
-      this.selectionBox.style.setProperty('top', viewportTop + 'px', 'important');
+      // Update selection box (viewport coordinates)
+      this.selectionBox.style.setProperty('left', left + 'px', 'important');
+      this.selectionBox.style.setProperty('top', top + 'px', 'important');
       this.selectionBox.style.setProperty('width', width + 'px', 'important');
       this.selectionBox.style.setProperty('height', height + 'px', 'important');
+
+      // Update dimensions tooltip
+      if (this.dimensionsTooltip) {
+        this.dimensionsTooltip.textContent = `${Math.round(width)} × ${Math.round(height)}`;
+      }
     }
 
     destroy() {
       if (this.destroyed) return;
       this.destroyed = true;
 
-      // Remove event listeners (must match the capture phase used in init)
+      // Remove event listeners
       if (this.overlay) {
-        this.overlay.removeEventListener('mousedown', this.mousedownHandler, true);
+        this.overlay.removeEventListener('mousedown', this.pointerdownHandler, true);
       }
-      document.removeEventListener('mousemove', this.mousemoveHandler, true);
-      document.removeEventListener('mouseup', this.mouseupHandler, true);
+      document.removeEventListener('mousemove', this.pointermoveHandler, true);
+      document.removeEventListener('mouseup', this.pointerupHandler, true);
       document.removeEventListener('keydown', this.keydownHandler, true);
       window.removeEventListener('scroll', this.scrollHandler, true);
       window.removeEventListener('beforeunload', this.unloadHandler);
@@ -242,24 +291,25 @@
         this.storageListener = null;
       }
 
-      // Remove elements with fade out
-      [this.overlay, this.selectionBox, this.instructions].forEach(el => {
-        if (el && el.parentNode) {
-          el.style.opacity = '0';
-          setTimeout(() => {
-            if (el.parentNode) el.parentNode.removeChild(el);
-          }, 150);
-        }
-      });
+      // Remove overlay (which contains everything)
+      if (this.overlay && this.overlay.parentNode) {
+        this.overlay.style.opacity = '0';
+        this.overlay.style.transition = 'opacity 0.2s ease';
+        setTimeout(() => {
+          if (this.overlay && this.overlay.parentNode) {
+            this.overlay.parentNode.removeChild(this.overlay);
+          }
+        }, 200);
+      }
 
+      // Clear reference
       window._areaSelector = null;
     }
   }
 
-  // Expose the class globally.
-  // Do NOT auto-instantiate here — selector.js is injected as a content script
-  // and runs on every page load.  The overlay must only start when the user
-  // explicitly clicks "Select Area" in the popup or floating icon.
-  // background.js creates the instance via a follow-up executeScript call.
+  // Export the class globally so background.js can instantiate it on demand
+  // Do NOT auto-instantiate here — selector.js is a content script that runs
+  // on every page load.  The AreaSelector should only be created when the user
+  // explicitly clicks "Select Area".
   window.AreaSelector = AreaSelector;
 })();

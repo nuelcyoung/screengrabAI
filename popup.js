@@ -3,7 +3,6 @@ let currentMode = 'visible';
 // Log when popup script loads
 console.log('[Popup] Popup script loaded');
 
-// Wrapper for chrome.runtime.sendMessage with timeout and retry
 // Settings
 let settings = {
   visionApiProvider: 'ollama',
@@ -29,24 +28,16 @@ let settings = {
     });
   }
 
-  console.log('[Popup] DOM ready');
-
   // Check if critical elements exist
-  const loading = document.getElementById('loading');
-  const loadingText = document.getElementById('loading-text');
-  const loadingStep = document.getElementById('loading-step');
   const captureBtn = document.getElementById('capture');
+  const result = document.getElementById('result');
+  const resultContent = document.getElementById('result-content');
 
   console.log('[Popup] Critical elements:', {
-    loading: !!loading,
-    loadingText: !!loadingText,
-    loadingStep: !!loadingStep,
-    captureBtn: !!captureBtn
+    captureBtn: !!captureBtn,
+    result: !!result,
+    resultContent: !!resultContent
   });
-
-  if (!loading || !loadingText || !loadingStep || !captureBtn) {
-    console.error('[Popup] Missing critical elements!');
-  }
 
   await loadSettings();
   setupSettingsUI();
@@ -115,17 +106,20 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
     if (selectedMode === 'area') {
       console.log('[Popup] Area mode selected, starting selection...');
 
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-      // Enqueue the area selection request
-      await CaptureQueue.enqueue({
-        mode: 'area',
-        url: tab.url,
-        tabId: tab.id
+      chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        // Send message to background to start area selection
+        // Wait for response to ensure it started before closing popup
+        chrome.runtime.sendMessage({
+          action: 'startAreaSelection',
+          tabId: tab.id,
+          url: tab.url
+        }, (response) => {
+          // Close popup after background confirms (or after delay if no response)
+          setTimeout(() => {
+            window.close();
+          }, 50);
+        });
       });
-
-      // Close the popup immediately so it doesn't capture mouse events
-      window.close();
 
       // The background.js will handle the rest and show the floating progress
       return;
@@ -138,17 +132,11 @@ document.getElementById('capture').addEventListener('click', async () => {
   console.log('[Popup] Capture button clicked, mode:', currentMode);
 
   const button = document.getElementById('capture');
-  const loading = document.getElementById('loading');
-  const loadingStep = document.getElementById('loading-step');
-  const loadingText = document.getElementById('loading-text');
   const result = document.getElementById('result');
   const resultContent = document.getElementById('result-content');
 
   console.log('[Popup] Elements found:', {
     button: !!button,
-    loading: !!loading,
-    loadingStep: !!loadingStep,
-    loadingText: !!loadingText,
     result: !!result,
     resultContent: !!resultContent
   });
@@ -160,61 +148,25 @@ document.getElementById('capture').addEventListener('click', async () => {
   }
 
   button.disabled = true;
-  loading.classList.add('visible');
+  button.textContent = 'Starting...';
   result.classList.remove('visible');
   resultContent.textContent = '';
 
-  // Initialize progress at step 0
-  updateProgress(0, 3, 10);
-
-  console.log('[Popup] Loading classes:', loading.className);
-  console.log('[Popup] Loading computed display:', window.getComputedStyle(loading).display);
-
-  // Use CaptureQueue for ALL capture modes (consistent with floating icon)
-  // This ensures:
-  // - Single source of truth for capture logic (background.js)
-  // - Popup can close safely during analysis
-  // - Proper error handling and state management
+  // For area selection, close popup immediately after starting
+  // For other modes, close popup and let floating progress indicator show progress
   await startCapture(currentMode);
+  
+  // Close popup after a short delay to ensure capture started
+  setTimeout(() => {
+    window.close();
+  }, 100);
 });
 
-// Cancel button handler
-document.getElementById('cancel-capture').addEventListener('click', async () => {
-  const button = document.getElementById('capture');
-  const loading = document.getElementById('loading');
-  const result = document.getElementById('result');
-  const resultContent = document.getElementById('result-content');
-
-  // Cancel via CaptureQueue (for area selection polling)
-  await CaptureQueue.cancel();
-
-  // Also try to cancel via background.js message (for active processing)
-  try {
-    await chrome.runtime.sendMessage({ action: 'cancelCapture' });
-  } catch (e) {
-    // Ignore if background not available
-  }
-
-  // Reset UI
-  loading.classList.remove('visible');
-  button.disabled = false;
-  result.classList.remove('visible');
-  resultContent.textContent = '';
-});
+// Cancel button handler - removed, cancellation now done via floating progress indicator
 
 // Start capture using CaptureQueue (works for all modes: visible, full, area)
 async function startCapture(mode) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const loadingStep = document.getElementById('loading-step');
-  const loading = document.getElementById('loading');
-
-  // Ensure loading is visible before starting async operations
-  if (!loading.classList.contains('visible')) {
-    loading.classList.add('visible');
-  }
-
-  // Force a render before starting the async operation
-  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
   // Enqueue request via CaptureQueue (same as floating icon)
   await CaptureQueue.enqueue({
@@ -223,96 +175,9 @@ async function startCapture(mode) {
     tabId: tab.id
   });
 
-  // Poll for result using same pattern as floating icon
-  await pollForCaptureResult(loadingStep);
-}
-
-// Poll for capture result (when popup is used)
-async function pollForCaptureResult(loadingStep) {
-  console.log('[Popup] Starting pollForCaptureResult');
-
-  const maxWait = 120000; // 2 minutes for full analysis
-  const pollInterval = 500;
-  let elapsed = 0;
-
-  const button = document.getElementById('capture');
-  const loading = document.getElementById('loading');
-  const result = document.getElementById('result');
-  const resultContent = document.getElementById('result-content');
-
-  console.log('[Popup] Polling elements found:', {
-    button: !!button,
-    loading: !!loading,
-    result: !!result,
-    resultContent: !!resultContent,
-    loadingStep: !!loadingStep
-  });
-
-  while (elapsed < maxWait) {
-    const state = await CaptureQueue.getState();
-
-    console.log('[Popup] Poll state:', state ? `${state.status} (${elapsed}ms)` : 'null');
-
-    if (state) {
-      const loadingText = document.getElementById('loading-text');
-
-      if (!loadingText) {
-        console.error('[Popup] loading-text element not found!');
-      }
-
-      if (state.status === 'capturing') {
-        console.log('[Popup] Status: capturing');
-        loadingText.textContent = 'Capturing...';
-        loadingStep.textContent = 'Capturing screenshot...';
-      } else if (state.status === 'selecting') {
-        console.log('[Popup] Status: selecting');
-        loadingText.textContent = 'Area Selection';
-        loadingStep.textContent = 'Select an area on the page...';
-      } else if (state.status === 'processing') {
-        console.log('[Popup] Status: processing');
-        loadingText.textContent = 'Processing';
-        loadingStep.textContent = 'Processing screenshot...';
-      } else if (state.status === 'analyzing') {
-        console.log('[Popup] Status: analyzing');
-        loadingText.textContent = 'Analyzing';
-        loadingStep.textContent = 'AI Analysis in progress...';
-      } else if (state.status === 'complete' && state.result) {
-        console.log('[Popup] Status: complete');
-        // Show result in popup
-        resultContent.innerHTML = state.result;
-        result.classList.add('visible');
-        loading.classList.remove('visible');
-        button.disabled = false;
-        await CaptureQueue.reset();
-        return;
-      } else if (state.status === 'error') {
-        console.error('[Popup] Error:', state.error);
-        resultContent.innerHTML = `<div class="error">${state.error}</div>`;
-        result.classList.add('visible');
-        loading.classList.remove('visible');
-        button.disabled = false;
-        await CaptureQueue.reset();
-        return;
-      } else if (state.status === 'cancelled') {
-        console.log('[Popup] Status: cancelled');
-        loading.classList.remove('visible');
-        button.disabled = false;
-        await CaptureQueue.reset();
-        return;
-      }
-    }
-
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
-    elapsed += pollInterval;
-  }
-
-  // Timeout
-  console.error('[Popup] Poll timeout');
-  resultContent.innerHTML = '<div class="error">Capture timed out. Please try again.</div>';
-  result.classList.add('visible');
-  loading.classList.remove('visible');
-  button.disabled = false;
-  await CaptureQueue.reset();
+  // Note: We don't poll for results in the popup anymore
+  // The floating progress indicator handles progress display on the page
+  // The result will be shown in the page via result-display component
 }
 
 // parseMarkdown, escapeHtml, and sanitizeSensitiveData are now imported from utils.js
@@ -361,68 +226,7 @@ async function cropImage(dataUrl, selection, devicePixelRatio) {
   return canvas.toDataURL('image/png');
 }
 
-// Progress management functions
-function updateProgress(step, totalSteps, percent) {
-  const progressBar = document.getElementById('progress-bar');
-  const loadingStep = document.getElementById('loading-step');
-  const loadingStats = document.getElementById('loading-stats');
-
-  if (progressBar) {
-    progressBar.style.width = `${percent}%`;
-  }
-
-  // Update step dots
-  for (let i = 1; i <= 3; i++) {
-    const dot = document.getElementById(`step-${i}`);
-    const line = document.getElementById(`line-${i}`);
-
-    if (dot) {
-      dot.classList.remove('active', 'completed');
-      if (i < step) {
-        dot.classList.add('completed');
-      } else if (i === step) {
-        dot.classList.add('active');
-      }
-    }
-
-    if (line) {
-      line.classList.remove('completed');
-      if (i < step) {
-        line.classList.add('completed');
-      }
-    }
-  }
-
-  return { loadingStep, loadingStats };
-}
-
-// Cleanup when popup closes
-// IMPORTANT: Do NOT clear captureRequest/currentCapture if they're in active use
-// Only clear them if the capture is still pending (not yet started by background.js)
+// Cleanup when popup closes - minimal cleanup since floating indicator handles everything
 window.addEventListener('beforeunload', () => {
-  // Check if there's an active capture before clearing
-  chrome.storage.local.get(['captureRequest', 'currentCapture'], (data) => {
-    const request = data.captureRequest;
-    const state = data.currentCapture;
-
-    // Only clear if:
-    // - No request exists, OR
-    // - Request is still pending (not yet picked up by background.js)
-    const shouldClear = !request ||
-      (request.status === 'pending' && (!state || state.status === 'pending'));
-
-    if (shouldClear) {
-      // Safe to clear - no active capture in progress
-      chrome.storage.local.remove([
-        'currentCapture',
-        'captureRequest',
-        'areaSelection',
-        'activeCaptureTabId'
-      ]).catch(() => {
-        // Ignore errors during cleanup
-      });
-    }
-    // If capture is in progress (processing/selecting/analyzing), DON'T clear
-    // Let background.js handle completion/error
-  });
+  // Just close the popup - the floating progress indicator and background.js handle everything else
 });

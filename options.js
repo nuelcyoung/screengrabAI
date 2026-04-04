@@ -86,6 +86,41 @@ function initNavigation() {
 }
 
 function setupUI() {
+    // Provider information for display
+    const providerInfo = {
+        'ollama': { name: 'Ollama (Local)', desc: 'Vision provider optimized for your hardware', needsKey: false },
+        'ollama-cloud': { name: 'Ollama (Cloud)', desc: 'Cloud-hosted Ollama models', needsKey: true, keyName: 'ollamaApiKey', keyUrl: 'https://ollama.com' },
+        'openai': { name: 'OpenAI', desc: 'High-performance cloud LLM for analysis', needsKey: true, keyName: 'openaiApiKey', keyUrl: 'https://platform.openai.com/api-keys' },
+        'grok': { name: 'Grok', desc: 'xAI\'s advanced reasoning model', needsKey: true, keyName: 'grokApiKey', keyUrl: 'https://console.x.ai' },
+        'google-gemini': { name: 'Google Gemini', desc: 'Google\'s multimodal AI model', needsKey: true, keyName: 'geminiApiKey', keyUrl: 'https://aistudio.google.com/app/apikey' },
+        'google-vision': { name: 'Google Cloud Vision', desc: 'Powerful optical character recognition', needsKey: true, keyName: 'googleApiKey', keyUrl: 'https://console.cloud.google.com/apis/credentials' }
+    };
+
+    // Modal elements
+    const modal = document.getElementById('api-key-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalInput = document.getElementById('modal-api-key-input');
+    const modalHelpText = document.getElementById('modal-help-text');
+    const modalCloseBtn = document.getElementById('modal-close');
+    const modalCancelBtn = document.getElementById('modal-cancel');
+    const modalSaveBtn = document.getElementById('modal-save');
+    const toggleVisibilityBtn = document.getElementById('toggle-key-visibility');
+
+    // Provider card elements
+    const visionProviderName = document.getElementById('vision-provider-name');
+    const visionProviderDesc = document.getElementById('vision-provider-desc');
+    const visionStatusBadge = document.getElementById('vision-status-badge');
+    const visionAddKeyBtn = document.getElementById('vision-add-key-btn');
+
+    const textProviderName = document.getElementById('text-provider-name');
+    const textProviderDesc = document.getElementById('text-provider-desc');
+    const textStatusBadge = document.getElementById('text-status-badge');
+    const textAddKeyBtn = document.getElementById('text-add-key-btn');
+
+    // Current provider being edited
+    let currentProviderType = null;
+    let currentProviderInfo = null;
+
     // Select elements
     const visionApiProvider = document.getElementById('vision-api-provider');
     const textApiProvider = document.getElementById('text-api-provider');
@@ -97,34 +132,48 @@ function setupUI() {
     const saveSettingsBtn = document.getElementById('save-settings');
     const saveIndicator = document.getElementById('save-indicator');
 
-    // API Key inputs
-    const ollamaApiKey = document.getElementById('ollama-api-key');
-    const googleApiKey = document.getElementById('google-api-key');
-    const openaiApiKey = document.getElementById('openai-api-key');
-    const grokApiKey = document.getElementById('grok-api-key');
-    const geminiApiKey = document.getElementById('gemini-api-key');
+    // Verify result toast
+    const showVerifyToast = (message, isSuccess) => {
+        // Remove existing toast if any
+        const existingToast = document.querySelector('.verify-toast');
+        if (existingToast) existingToast.remove();
 
-    // Status badges
-    const ollamaKeyStatus = document.getElementById('ollama-key-status');
-    const googleKeyStatus = document.getElementById('google-key-status');
-    const openaiKeyStatus = document.getElementById('openai-key-status');
-    const grokKeyStatus = document.getElementById('grok-key-status');
-    const geminiKeyStatus = document.getElementById('gemini-key-status');
+        const toast = document.createElement('div');
+        toast.className = 'verify-toast';
+        toast.textContent = message;
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: ${isSuccess ? 'rgba(16, 185, 129, 0.95)' : 'rgba(248, 113, 113, 0.95)'};
+            color: white;
+            padding: 16px 24px;
+            border-radius: 12px;
+            font-size: 14px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            z-index: 10000;
+            animation: slideUp 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        `;
 
-    // Key groups
-    const ollamaKeyGroup = document.getElementById('ollama-key-group');
-    const googleKeyGroup = document.getElementById('google-key-group');
-    const openaiKeyGroup = document.getElementById('openai-key-group');
-    const grokKeyGroup = document.getElementById('grok-key-group');
-    const geminiKeyGroup = document.getElementById('gemini-key-group');
-    const noApiKeysHint = document.getElementById('no-api-keys-hint');
+        // Add icon
+        const icon = document.createElement('span');
+        icon.textContent = isSuccess ? '✓' : '✗';
+        icon.style.cssText = `
+            font-size: 18px;
+            font-weight: bold;
+        `;
+        toast.prepend(icon);
 
-    // Save buttons
-    const saveOllamaKeyBtn = document.getElementById('save-ollama-key');
-    const saveGoogleKeyBtn = document.getElementById('save-google-key');
-    const saveOpenAIKeyBtn = document.getElementById('save-openai-key');
-    const saveGrokKeyBtn = document.getElementById('save-grok-key');
-    const saveGeminiKeyBtn = document.getElementById('save-gemini-key');
+        document.body.appendChild(toast);
+
+        setTimeout(() => {
+            toast.style.animation = 'slideDown 0.3s ease';
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    };
 
     const exportBtn = document.getElementById('export-settings');
     const importBtn = document.getElementById('import-settings-btn');
@@ -134,131 +183,257 @@ function setupUI() {
     visionApiProvider.value = settings.visionApiProvider;
     textApiProvider.value = settings.textApiProvider;
     // Models will be set after fetch
-    ollamaApiKey.value = settings.ollamaApiKey || '';
-    googleApiKey.value = settings.googleApiKey || '';
-    openaiApiKey.value = settings.openaiApiKey || '';
-    grokApiKey.value = settings.grokApiKey || '';
-    geminiApiKey.value = settings.geminiApiKey || '';
     floatingIconEnabled.checked = settings.floatingIconEnabled;
     redirectModeEnabled.checked = settings.useRedirectMode;
-
-    // Helper functions
-    const updateKeyVisibility = () => {
-        const vProvider = visionApiProvider.value;
-        const tProvider = textApiProvider.value;
-        const isRedirect = redirectModeEnabled.checked; // Check if Redirect Mode is active
-
-        // Hide all first
-        [ollamaKeyGroup, googleKeyGroup, openaiKeyGroup, grokKeyGroup, geminiKeyGroup].forEach(g => {
-            g.style.display = 'none';
-            g.classList.remove('missing-key');
-        });
-        noApiKeysHint.style.display = 'none';
-
-        let needed = false;
-
-        const showKeyGroup = (group, key) => {
-            group.style.display = 'block';
-            if (!key) group.classList.add('missing-key');
-        };
-
-        if (vProvider === 'ollama-cloud' || tProvider === 'ollama-cloud') {
-            showKeyGroup(ollamaKeyGroup, settings.ollamaApiKey);
-            needed = true;
-        }
-
-        // If it is Redirect Mode, we don't need UI for API Keys for web providers!
-        if (!isRedirect) {
-            if (vProvider === 'google-vision') {
-                showKeyGroup(googleKeyGroup, settings.googleApiKey);
-                needed = true;
-            }
-            if (vProvider === 'openai' || tProvider === 'openai') {
-                showKeyGroup(openaiKeyGroup, settings.openaiApiKey);
-                needed = true;
-            }
-            if (vProvider === 'grok' || tProvider === 'grok') {
-                showKeyGroup(grokKeyGroup, settings.grokApiKey);
-                needed = true;
-            }
-            if (vProvider === 'google-gemini' || tProvider === 'google-gemini') {
-                showKeyGroup(geminiKeyGroup, settings.geminiApiKey);
-                needed = true;
-            }
-        }
-
-        if (!needed) {
-            noApiKeysHint.style.display = 'block';
-            if (isRedirect) {
-                noApiKeysHint.innerHTML = '<p>Redirect Mode is enabled. No API keys needed for web providers.</p>';
-            } else {
-                noApiKeysHint.innerHTML = '<p>No API keys needed for local Ollama. Select a cloud provider in AI Models to add keys.</p>';
-            }
-        }
-    };
-
-    const updateKeyStatus = () => {
-        const updateStatus = (key, element) => {
-            if (key) {
-                element.textContent = 'Saved';
-                element.classList.add('saved');
-            } else {
-                element.textContent = 'Not saved';
-                element.classList.remove('saved');
-            }
-        };
-
-        updateStatus(settings.ollamaApiKey, ollamaKeyStatus);
-        updateStatus(settings.googleApiKey, googleKeyStatus);
-        updateStatus(settings.openaiApiKey, openaiKeyStatus);
-        updateStatus(settings.grokApiKey, grokKeyStatus);
-        updateStatus(settings.geminiApiKey, geminiKeyStatus);
-    };
 
     const showSaveSuccess = () => {
         saveIndicator.classList.add('visible');
         setTimeout(() => saveIndicator.classList.remove('visible'), 3000);
     };
 
-    // Event listeners
+    // Update provider card display
+    const updateProviderCard = (type, provider) => {
+        const info = providerInfo[provider];
+        const nameEl = type === 'vision' ? visionProviderName : textProviderName;
+        const descEl = type === 'vision' ? visionProviderDesc : textProviderDesc;
+        const statusBadge = type === 'vision' ? visionStatusBadge : textStatusBadge;
+        const addKeyBtn = type === 'vision' ? visionAddKeyBtn : textAddKeyBtn;
+
+        nameEl.textContent = info.name;
+        descEl.textContent = info.desc;
+
+        // Update status and add key button visibility
+        if (info.needsKey) {
+            const hasKey = settings[info.keyName];
+            statusBadge.textContent = hasKey ? 'ACTIVE' : 'NEEDS KEY';
+            statusBadge.className = hasKey ? 'status-badge saved' : 'status-badge';
+            addKeyBtn.style.display = 'inline-flex';
+        } else {
+            statusBadge.textContent = 'ACTIVE';
+            statusBadge.className = 'status-badge saved';
+            addKeyBtn.style.display = 'none';
+        }
+    };
+
+    // Update keys overview badges
+    const updateKeysOverview = () => {
+        const keyMapping = {
+            'openai': { key: 'openaiApiKey', badge: 'overview-openai-status', provider: 'openai' },
+            'grok': { key: 'grokApiKey', badge: 'overview-grok-status', provider: 'grok' },
+            'google-gemini': { key: 'geminiApiKey', badge: 'overview-gemini-status', provider: 'google-gemini' },
+            'ollama-cloud': { key: 'ollamaApiKey', badge: 'overview-ollama-status', provider: 'ollama-cloud' },
+            'google-vision': { key: 'googleApiKey', badge: 'overview-google-status', provider: 'google-vision' }
+        };
+
+        Object.values(keyMapping).forEach(({ key, badge }) => {
+            const badgeEl = document.getElementById(badge);
+            if (badgeEl) {
+                if (settings[key]) {
+                    badgeEl.textContent = 'Configured';
+                    badgeEl.classList.add('saved');
+                } else {
+                    badgeEl.textContent = 'Not Configured';
+                    badgeEl.classList.remove('saved');
+                }
+            }
+        });
+    };
+
+    // Modal functions
+    const openModal = (type, provider) => {
+        const info = providerInfo[provider];
+        currentProviderType = type;
+        currentProviderInfo = info;
+
+        modalTitle.textContent = `Add API Key for ${info.name}`;
+        modalInput.value = settings[info.keyName] || '';
+        modalHelpText.innerHTML = `Get your key from <a href="${info.keyUrl}" target="_blank">${new URL(info.keyUrl).hostname}</a>`;
+        modal.classList.add('visible');
+        modalInput.focus();
+    };
+
+    const closeModal = () => {
+        modal.classList.remove('visible');
+        modalInput.value = '';
+        currentProviderType = null;
+        currentProviderInfo = null;
+    };
+
+    const saveApiKey = async () => {
+        if (!currentProviderInfo) return;
+
+        const value = modalInput.value.trim();
+        if (!value) {
+            alert('Please enter an API key');
+            return;
+        }
+
+        await chrome.storage.local.set({ [currentProviderInfo.keyName]: value });
+        settings[currentProviderInfo.keyName] = value;
+
+        updateProviderCard(currentProviderType, currentProviderType === 'vision' ? visionApiProvider.value : textApiProvider.value);
+        updateKeysOverview();
+
+        // Refresh models after saving key
+        fetchAndPopulateModels('vision', visionApiProvider.value);
+        fetchAndPopulateModels('text', textApiProvider.value);
+
+        closeModal();
+        showSaveSuccess();
+    };
+
+    // Toggle password visibility
+    toggleVisibilityBtn.addEventListener('click', () => {
+        const isPassword = modalInput.type === 'password';
+        modalInput.type = isPassword ? 'text' : 'password';
+        document.getElementById('eye-icon').style.display = isPassword ? 'none' : 'block';
+        document.getElementById('eye-off-icon').style.display = isPassword ? 'block' : 'none';
+    });
+
+    // Modal event listeners
+    modalCloseBtn.addEventListener('click', closeModal);
+    modalCancelBtn.addEventListener('click', closeModal);
+    modalSaveBtn.addEventListener('click', saveApiKey);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal || e.target.classList.contains('modal-overlay')) {
+            closeModal();
+        }
+    });
+
+    modalInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            saveApiKey();
+        }
+    });
+
+    // Add key button listeners
+    visionAddKeyBtn.addEventListener('click', () => {
+        openModal('vision', visionApiProvider.value);
+    });
+
+    textAddKeyBtn.addEventListener('click', () => {
+        openModal('text', textApiProvider.value);
+    });
+
+    // Verify button handlers
+    const verifyApiKey = async (type, provider) => {
+        const info = providerInfo[provider];
+        if (!info.needsKey) {
+            showVerifyToast('This provider does not require an API key.', false);
+            return;
+        }
+
+        const key = settings[info.keyName];
+        if (!key) {
+            showVerifyToast('No API key found. Please add a key first.', false);
+            return;
+        }
+
+        const btn = type === 'vision' ? document.getElementById('vision-verify-btn') : document.getElementById('text-verify-btn');
+        const originalText = btn.textContent;
+        btn.textContent = 'Verifying...';
+        btn.disabled = true;
+
+        try {
+            let isValid = false;
+
+            // Make a simple test call to verify the key
+            if (provider === 'openai') {
+                const response = await fetch('https://api.openai.com/v1/models', {
+                    headers: { 'Authorization': `Bearer ${key}` }
+                });
+                isValid = response.ok;
+                if (!isValid) {
+                    const error = await response.json();
+                    throw new Error(error.error?.message || 'Invalid API key');
+                }
+            } else if (provider === 'grok') {
+                const response = await fetch('https://api.x.ai/v1/models', {
+                    headers: { 'Authorization': `Bearer ${key}` }
+                });
+                isValid = response.ok;
+                if (!isValid) {
+                    const error = await response.json();
+                    throw new Error(error.error?.message || 'Invalid API key');
+                }
+            } else if (provider === 'google-gemini') {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+                isValid = response.ok;
+                if (!isValid) {
+                    const error = await response.json();
+                    throw new Error(error.error?.message || 'Invalid API key');
+                }
+            } else if (provider === 'google-vision') {
+                // Google Vision requires a more complex test - we'll just validate format
+                if (key.startsWith('AIza')) {
+                    isValid = true;
+                } else {
+                    throw new Error('Invalid Google Cloud Vision API key format');
+                }
+            } else if (provider === 'ollama-cloud') {
+                // Ollama Cloud - try to get models
+                const response = await fetch('https://ollama.com/api/tags', {
+                    headers: { 'Authorization': `Bearer ${key}` }
+                });
+                isValid = response.ok;
+                if (!isValid) {
+                    throw new Error('Invalid Ollama Cloud API key');
+                }
+            }
+
+            if (isValid) {
+                showVerifyToast('API key is valid!', true);
+            }
+        } catch (error) {
+            showVerifyToast(`Verification failed: ${error.message}`, false);
+        } finally {
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }
+    };
+
+    // Add verify button listeners
+    document.getElementById('vision-verify-btn').addEventListener('click', () => {
+        verifyApiKey('vision', visionApiProvider.value);
+    });
+
+    document.getElementById('text-verify-btn').addEventListener('click', () => {
+        verifyApiKey('text', textApiProvider.value);
+    });
+
+    // Keys overview configure button listeners
+    document.querySelectorAll('.configure-key-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const provider = btn.dataset.provider;
+            // Open modal directly for the provider
+            const info = providerInfo[provider];
+            currentProviderType = 'overview';
+            currentProviderInfo = info;
+
+            modalTitle.textContent = `Add API Key for ${info.name}`;
+            modalInput.value = settings[info.keyName] || '';
+            modalHelpText.innerHTML = `Get your key from <a href="${info.keyUrl}" target="_blank">${new URL(info.keyUrl).hostname}</a>`;
+            modal.classList.add('visible');
+            modalInput.focus();
+        });
+    });
+
+    // Provider change listeners - update card display
     visionApiProvider.addEventListener('change', () => {
-        updateKeyVisibility();
+        updateProviderCard('vision', visionApiProvider.value);
         fetchAndPopulateModels('vision', visionApiProvider.value);
     });
 
     textApiProvider.addEventListener('change', () => {
-        updateKeyVisibility();
+        updateProviderCard('text', textApiProvider.value);
         fetchAndPopulateModels('text', textApiProvider.value);
     });
 
     redirectModeEnabled.addEventListener('change', () => {
-        settings.useRedirectMode = redirectModeEnabled.checked; // Sync temporary setting for UI effects
-        updateKeyVisibility();
+        settings.useRedirectMode = redirectModeEnabled.checked;
         fetchAndPopulateModels('vision', visionApiProvider.value);
         fetchAndPopulateModels('text', textApiProvider.value);
     });
-
-    // Save Key Handlers
-    const setupSaveKeyHandler = (btn, input, keyName) => {
-        btn.addEventListener('click', async () => {
-            const val = input.value.trim();
-            if (!val) return alert('Please enter an API key');
-            await chrome.storage.local.set({ [keyName]: val });
-            settings[keyName] = val;
-            updateKeyStatus();
-            updateKeyVisibility(); // Refresh warnings
-            showSaveSuccess();
-            // Refresh models after saving key
-            fetchAndPopulateModels('vision', visionApiProvider.value);
-            fetchAndPopulateModels('text', textApiProvider.value);
-        });
-    };
-
-    setupSaveKeyHandler(saveOllamaKeyBtn, ollamaApiKey, 'ollamaApiKey');
-    setupSaveKeyHandler(saveGoogleKeyBtn, googleApiKey, 'googleApiKey');
-    setupSaveKeyHandler(saveOpenAIKeyBtn, openaiApiKey, 'openaiApiKey');
-    setupSaveKeyHandler(saveGrokKeyBtn, grokApiKey, 'grokApiKey');
-    setupSaveKeyHandler(saveGeminiKeyBtn, geminiApiKey, 'geminiApiKey');
 
     saveSettingsBtn.addEventListener('click', async () => {
         const newSettings = {
@@ -327,8 +502,11 @@ function setupUI() {
     });
 
     // Initial updates
-    updateKeyVisibility();
-    updateKeyStatus();
+    updateKeysOverview();
+
+    // Initialize provider cards
+    updateProviderCard('vision', visionApiProvider.value);
+    updateProviderCard('text', textApiProvider.value);
 }
 
 /**

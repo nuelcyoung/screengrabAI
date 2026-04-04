@@ -111,3 +111,12 @@ if (typeof module !== 'undefined' && module.exports) {
     formatResult
   };
 }
+
+// Also export to window for browser/content script context
+if (typeof window !== 'undefined') {
+  window.generateRandomId = generateRandomId;
+  window.parseMarkdown = parseMarkdown;
+  window.escapeHtml = escapeHtml;
+  window.sanitizeSensitiveData = sanitizeSensitiveData;
+  window.formatResult = formatResult;
+}

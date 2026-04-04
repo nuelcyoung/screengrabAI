@@ -39,8 +39,7 @@
       ],
       "css": [
         "selector.css",
-        "result-display.css",
-        "floating-icon.css"
+        "result-display.css"
       ],
       "run_at": "document_end"
     }
@@ -50,14 +49,14 @@
       "resources": [
         "selector.css",
         "selector.js",
-        "floating-icon.css",
         "floating-icon.js",
         "ai-service.js",
         "capture-queue.js",
         "result-display.css",
         "result-display.js",
         "utils.js",
-        "progress-indicator.js"
+        "progress-indicator.js",
+        "icon48.png"
       ],
       "matches": [
         "<all_urls>"

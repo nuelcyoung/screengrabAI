@@ -59,11 +59,7 @@ class ResultDisplay {
     this.panel.innerHTML = `
       <div id="${this.HEADER_ID}" class="sg-header">
         <div id="${this.TITLE_ID}" class="sg-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <path d="M21 15l-5-5L5 21" />
-          </svg>
+          <img src="${chrome.runtime.getURL('icon48.png')}" alt="ScreenGrab" class="sg-logo" onerror="this.style.display='none'; console.error('Failed to load icon48.png')" />
           <span>Analysis Result</span>
         </div>
         <div id="${this.ACTIONS_ID}" class="sg-actions">
@@ -311,3 +307,142 @@ const SG_RESULT_DISPLAY_KEY = '__sg_result_display_' + Math.random().toString(36
 window[SG_RESULT_DISPLAY_KEY] = ResultDisplay;
 // Also expose as window.ResultDisplay for compatibility
 window.ResultDisplay = ResultDisplay;
+
+// Flag to signal that result has been shown (used by floating-icon.js polling)
+window.__sg_resultShown = false;
+
+// Follow-up question handler
+async function handleFollowUpQuestion(question, conversationHistory, displayInstance) {
+  const resultDisplay = displayInstance || window.__sg_current_result_display;
+
+  try {
+    if (resultDisplay) {
+      resultDisplay.setFollowUpLoading(true);
+    }
+
+    // Use CaptureQueue to send follow-up question
+    await CaptureQueue.requestFollowUp(question, conversationHistory);
+
+    // Poll for response
+    await pollForFollowUpResponse(resultDisplay);
+
+  } catch (error) {
+    if (resultDisplay) {
+      resultDisplay.setFollowUpLoading(false);
+      resultDisplay.appendFollowUpResponse(`Error: ${error.message}`);
+    }
+  }
+}
+
+// Poll for follow-up response
+async function pollForFollowUpResponse(resultDisplay) {
+  const maxWait = 120000;
+  const pollInterval = 500;
+  let elapsed = 0;
+
+  while (elapsed < maxWait) {
+    const response = await CaptureQueue.getFollowUpResponse();
+
+    if (response) {
+      await CaptureQueue.clearFollowUpResponse();
+
+      if (resultDisplay) {
+        resultDisplay.setFollowUpLoading(false);
+
+        if (response.error) {
+          resultDisplay.appendFollowUpResponse(`Error: ${response.error}`);
+        } else {
+          resultDisplay.appendFollowUpResponse(response.response);
+        }
+      }
+      return;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    elapsed += pollInterval;
+  }
+
+  // Timeout
+  if (resultDisplay) {
+    resultDisplay.setFollowUpLoading(false);
+    resultDisplay.appendFollowUpResponse('Error: Request timed out. Please try again.');
+  }
+}
+
+// Listen for showResult messages from background.js
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'showResult') {
+    // Hide any existing result display
+    if (window.__sg_current_result_display) {
+      window.__sg_current_result_display.destroy();
+    }
+
+    // Create new result display
+    window.__sg_current_result_display = new ResultDisplay();
+
+    // Register cleanup callback
+    window.__sg_current_result_display.setOnClose(() => {
+      // Clear storage state when modal is closed
+      chrome.storage.local.remove([
+        'currentCapture',
+        'captureRequest',
+        'areaSelection',
+        'activeCaptureTabId'
+      ]).catch(() => {});
+
+      // Ensure floating icon is visible
+      const floatBtn = document.querySelector('[id^="sg_float_btn"]');
+      if (floatBtn) floatBtn.style.display = '';
+    });
+
+    // Register follow-up callback
+    window.__sg_current_result_display.setOnFollowUp(handleFollowUpQuestion);
+
+    // Parse result to conversation history
+    const conversationHistory = parseResultToConversation(message.result);
+    window.__sg_current_result_display.setConversationHistory(conversationHistory);
+
+    // Show the result
+    window.__sg_current_result_display.showResult(message.result);
+
+    // Signal that result has been shown (for floating-icon.js polling)
+    window.__sg_resultShown = true;
+
+    sendResponse({ success: true });
+    return true; // Keep channel open for async response
+  }
+  return true;
+});
+
+// Parse result HTML to conversation history format
+function parseResultToConversation(resultHtml) {
+  const history = [];
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = resultHtml;
+
+  const h2Elements = tempDiv.querySelectorAll('h2');
+
+  if (h2Elements.length > 0) {
+    let accumulatedContent = '';
+    h2Elements.forEach((h2) => {
+      const sectionName = h2.textContent;
+      let sectionContent = '';
+      let nextElement = h2.nextElementSibling;
+      while (nextElement && nextElement.tagName !== 'H2') {
+        sectionContent += nextElement.textContent + '\n';
+        nextElement = nextElement.nextElementSibling;
+      }
+      accumulatedContent += `**${sectionName}**\n${sectionContent.trim()}\n\n`;
+    });
+    if (accumulatedContent.trim()) {
+      history.push({ role: 'assistant', content: accumulatedContent.trim() });
+    }
+  } else {
+    const allText = tempDiv.textContent?.trim();
+    if (allText) {
+      history.push({ role: 'assistant', content: allText });
+    }
+  }
+
+  return history;
+}

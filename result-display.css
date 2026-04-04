@@ -54,6 +54,14 @@
   color: #8b5cf6 !important;
 }
 
+.sg-title .sg-logo {
+  width: 24px !important;
+  height: 24px !important;
+  object-fit: contain !important;
+  display: block !important;
+  flex-shrink: 0 !important;
+}
+
 .sg-actions {
   display: flex !important;
   gap: 12px !important;

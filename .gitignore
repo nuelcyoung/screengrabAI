@@ -18,6 +18,7 @@ Thumbs.db
 *~
 .claude/
 .agent/
+.qwen/
 
 # Build output
 dist/

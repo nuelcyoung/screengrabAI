@@ -7,6 +7,11 @@
  */
 
 const CaptureQueue = {
+    // Maximum age (ms) for a processing lock before it's considered stale.
+    // Content scripts cannot clear chrome.storage.session, so stale locks
+    // would otherwise block all future captures permanently.
+    LOCK_TTL: 30000,
+
     KEYS: {
         REQUEST: 'captureRequest',
         STATE: 'currentCapture',
@@ -45,12 +50,17 @@ const CaptureQueue = {
         // Check if we're already processing a request using session storage lock
         try {
             const lockData = await chrome.storage.session.get(this.KEYS.PROCESSING_LOCK);
-            if (lockData[this.KEYS.PROCESSING_LOCK]) {
-                console.log('[CaptureQueue] Already processing a request, skipping dequeue');
-                return null;
+            const lock = lockData[this.KEYS.PROCESSING_LOCK];
+            if (lock) {
+                // Check if lock is still within TTL
+                if (lock.timestamp && (Date.now() - lock.timestamp < this.LOCK_TTL)) {
+                    return null; // Valid lock, still processing
+                }
+                // Stale lock — clear it and proceed
+                console.warn('[CaptureQueue] Clearing stale processing lock (age:', Date.now() - (lock.timestamp || 0), 'ms)');
+                await chrome.storage.session.remove(this.KEYS.PROCESSING_LOCK);
             }
         } catch (e) {
-            // session.storage might not be available, continue anyway
             console.warn('[CaptureQueue] Could not check processing lock:', e);
         }
 
@@ -257,4 +267,9 @@ const CaptureQueue = {
 // Export for different contexts
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = CaptureQueue;
+}
+
+// Also export to window for browser/content script context
+if (typeof window !== 'undefined') {
+    window.CaptureQueue = CaptureQueue;
 }
