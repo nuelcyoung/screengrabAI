@@ -32,8 +32,14 @@ async function ensureOffscreenDocument() {
 }
 
 // Resize image if needed to prevent API 413 errors
-async function resizeImageIfNeeded(base64Image, maxSize = 1920) {
+// Accepts either full data URL or bare base64 string
+async function resizeImageIfNeeded(imageData, maxSize = 1920) {
   try {
+    // Extract base64 from data URL if needed
+    const base64Image = imageData.startsWith('data:') 
+      ? imageData.split(',')[1] 
+      : imageData;
+
     // Ensure offscreen document exists
     await ensureOffscreenDocument();
 
@@ -48,11 +54,12 @@ async function resizeImageIfNeeded(base64Image, maxSize = 1920) {
       return response.dataUrl;
     }
 
-    // If resize failed, return original
+    // If resize failed, return original base64 (not full data URL)
     return base64Image;
   } catch (error) {
     console.warn('[Background] Image resize failed, using original:', error.message);
-    return base64Image;
+    // Return original base64 (not full data URL)
+    return imageData.startsWith('data:') ? imageData.split(',')[1] : imageData;
   }
 }
 
@@ -85,8 +92,6 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     // Handle new capture requests
     if (changes.captureRequest && changes.captureRequest.newValue) {
       const request = changes.captureRequest.newValue;
-      console.log('[Background] Capture request received:', request);
-      // Use setTimeout to break the call stack and allow the storage event to complete
       setTimeout(() => {
         _isProcessingStorageChange = false;
         processQueuedRequest();
@@ -103,7 +108,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       return;
     }
 
-    // Handle follow-up requests (storage-based, works when service worker is suspended)
+    // Handle follow-up requests
     if (changes.followUpRequest && changes.followUpRequest.newValue) {
       setTimeout(() => {
         _isProcessingStorageChange = false;
@@ -112,12 +117,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       return;
     }
 
-    // Reset polling flag when capture completes, errors, or is cancelled
-    // This ensures new captures can start immediately
+    // Reset state when capture completes
     if (changes.currentCapture && changes.currentCapture.newValue) {
       const status = changes.currentCapture.newValue.status;
       if (status === 'complete' || status === 'error' || status === 'cancelled') {
+        // Clear in-memory flag (secondary mechanism)
         pollingActive = false;
+        // Also clear the processing lock to ensure clean state
+        chrome.storage.session.remove(CaptureQueue.KEYS.PROCESSING_LOCK).catch(() => {});
       }
     }
 
@@ -130,31 +137,37 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 // Process queued request (called from storage listener)
 async function processQueuedRequest() {
-  console.log('[Background] processQueuedRequest called, pollingActive:', pollingActive);
-
-  if (pollingActive) {
-    console.log('[Background] Already polling, skipping');
-    return;
+  // Check processing lock (persists across service worker restarts)
+  // This is more reliable than the in-memory pollingActive flag
+  try {
+    const lockData = await chrome.storage.session.get(CaptureQueue.KEYS.PROCESSING_LOCK);
+    const lock = lockData[CaptureQueue.KEYS.PROCESSING_LOCK];
+    if (lock) {
+      // Check if lock is still within TTL (30s) — stale locks are ignored
+      if (lock.timestamp && (Date.now() - lock.timestamp < 30000)) {
+        return;  // Valid lock, still processing
+      }
+      // Stale lock — clear it and proceed
+      console.warn('[Background] Clearing stale processing lock (age:', Date.now() - (lock.timestamp || 0), 'ms)');
+      await chrome.storage.session.remove(CaptureQueue.KEYS.PROCESSING_LOCK);
+    }
+  } catch (e) {
+    console.warn('[Background] Could not check processing lock:', e);
   }
 
   try {
     const request = await CaptureQueue.dequeue();
     if (!request) {
-      console.log('[Background] No request to process');
       return;
     }
 
-    console.log('[Background] Processing request:', request);
     pollingActive = true;
     let { mode, tabId, url } = request;
-
-    console.log('[Background] Mode:', mode, 'Tab ID:', tabId, 'URL:', url);
 
     // Fallback: If tabId is missing (from floating icon), find the active tab
     if (!tabId) {
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
       tabId = activeTab?.id;
-      console.log('[Background] Resolved tabId from active tab:', tabId);
     }
 
     if (!tabId) {
@@ -174,28 +187,25 @@ async function processQueuedRequest() {
       result: null
     });
 
-    console.log('[Background] Starting capture for mode:', mode);
-
     if (mode === 'visible') {
-      console.log('[Background] Capturing visible tab');
       const tab = await chrome.tabs.get(tabId);
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      // Show progress indicator only when analysis starts (after capture is complete)
       await processCapturedImage(dataUrl, tabId);
     } else if (mode === 'full') {
-      console.log('[Background] Capturing full page');
       const tab = await chrome.tabs.get(tabId);
       const dataUrl = await captureFullPage(tab);
+      // Show progress indicator only when analysis starts (after capture is complete)
       await processCapturedImage(dataUrl, tabId);
     } else if (mode === 'area') {
-      console.log('[Background] Starting area selection');
+      // For area selection, don't show progress during selection
+      // Progress will be shown after user completes area selection
       await startAreaSelection(tabId);
+      return;
     }
   } catch (error) {
     console.error('[Background] processQueuedRequest error:', error);
     await CaptureQueue.updateState({ status: 'error', error: error.message });
-  } finally {
-    pollingActive = false;
-    await CaptureQueue.clear();
   }
 }
 
@@ -215,20 +225,44 @@ async function startAreaSelection(tabId) {
       throw new Error('Cannot capture screenshots on this page (Restricted URL).');
     }
 
-    // Update state to 'selecting' BEFORE injecting so UI shows immediate feedback
+    // Update state to 'selecting' first so hideFloatingProgress check passes
     await CaptureQueue.updateState({ status: 'selecting', tabId });
+
+    // Hide progress indicator during area selection (the overlay is the UI)
+    await hideFloatingProgress(tabId);
 
     // Clean up any existing area selection state BEFORE injecting
     await chrome.storage.local.remove(['areaSelection']);
 
-    // Inject selector resources - executeScript waits for completion
+    // Inject CSS (always needed, safe to re-inject)
     await chrome.scripting.insertCSS({ target: { tabId }, files: ['selector.css'] });
 
-    // Inject the selector class definition
-    await chrome.scripting.executeScript({
+    // Check if AreaSelector is already available from content script
+    // If not, inject selector.js (handles edge cases where content script didn't load)
+    const checkResult = await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['selector.js']
+      func: () => typeof window.AreaSelector !== 'undefined'
     });
+
+    const alreadyLoaded = checkResult && checkResult[0] && checkResult[0].result;
+
+    if (!alreadyLoaded) {
+      // Inject the selector class definition (fallback for when content script didn't load)
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['selector.js']
+      });
+    } else {
+      // Clean up any existing instance before creating new one
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          if (window._areaSelector && typeof window._areaSelector.destroy === 'function') {
+            try { window._areaSelector.destroy(); } catch (e) {}
+          }
+        }
+      });
+    }
 
     // Delay to allow popup-close synthetic events to fire and be ignored
     await new Promise(resolve => setTimeout(resolve, 350));
@@ -266,6 +300,9 @@ async function startAreaSelection(tabId) {
     }
 
     await CaptureQueue.updateState({ status: 'error', error: msg });
+    // Release the processing lock so future captures aren't blocked
+    await CaptureQueue.clear();
+    pollingActive = false;
   }
 }
 
@@ -274,22 +311,29 @@ async function handleAreaSelectionChange(areaSelection) {
   const data = await chrome.storage.local.get('activeCaptureTabId');
   const tabId = data.activeCaptureTabId;
 
-  if (!tabId) return;
+  if (!tabId) {
+    return;
+  }
 
-  // Clear immediately
+  // Clear area selection state immediately
   await chrome.storage.local.remove(['areaSelection', 'activeCaptureTabId']);
 
   if (areaSelection === null) {
+    // User cancelled - clear request and mark as cancelled
+    await CaptureQueue.clear();
+    pollingActive = false;
     await CaptureQueue.updateState({ status: 'cancelled' });
     return;
   }
 
   try {
-    await CaptureQueue.updateState({ status: 'processing' });
-
-    // Show floating progress indicator immediately after selection
+    // Show floating progress indicator BEFORE updating state to avoid race conditions
+    // This ensures the progress indicator is visible when polling detects 'processing' state
     await showFloatingProgress(tabId);
     await updateFloatingProgress(tabId, 0, 15, 'Processing', 'Preparing capture...');
+    
+    // Now update state to 'processing' (after progress is shown)
+    await CaptureQueue.updateState({ status: 'processing', tabId });
 
     // Delay for overlay to clear
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -325,13 +369,17 @@ async function handleAreaSelectionChange(areaSelection) {
     });
 
     let finalDataUrl;
+    console.log('[Background] Viewport info:', viewportInfo);
 
     if (viewportInfo.isInViewport) {
       // Selection is within viewport - simple capture, no scrolling needed
+      console.log('[Background] Capturing visible tab...');
       const visibleDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      console.log('[Background] Visible tab captured, length:', visibleDataUrl?.length);
 
       // Crop the captured image to the selection area (relative to viewport)
-      const [{ result: croppedDataUrl }] = await chrome.scripting.executeScript({
+      console.log('[Background] Starting image crop...');
+      const cropResult = await chrome.scripting.executeScript({
         target: { tabId },
         func: (dataUrl, selection, viewportTop, viewportLeft, dpr) => {
           return new Promise((resolve, reject) => {
@@ -360,6 +408,12 @@ async function handleAreaSelectionChange(areaSelection) {
         args: [visibleDataUrl, areaSelection, viewportInfo.viewportTop, viewportInfo.viewportLeft, viewportInfo.dpr]
       });
 
+      const croppedDataUrl = cropResult?.[0]?.result;
+      console.log('[Background] Crop result:', cropResult);
+      console.log('[Background] Cropped data URL length:', croppedDataUrl?.length);
+      if (!croppedDataUrl || !croppedDataUrl.startsWith('data:')) {
+        throw new Error('Failed to crop image: invalid result');
+      }
       finalDataUrl = croppedDataUrl;
     } else {
       // Selection extends beyond viewport - need multi-capture with scrolling
@@ -370,7 +424,7 @@ async function handleAreaSelectionChange(areaSelection) {
         func: () => window.devicePixelRatio || 1
       });
 
-      const [{ result: croppedDataUrl }] = await chrome.scripting.executeScript({
+      const cropResult2 = await chrome.scripting.executeScript({
         target: { tabId },
         func: (dataUrl, selection, dpr) => {
           return new Promise((resolve, reject) => {
@@ -396,13 +450,29 @@ async function handleAreaSelectionChange(areaSelection) {
         args: [fullPageDataUrl, areaSelection, dpr]
       });
 
-      finalDataUrl = croppedDataUrl;
+      const croppedDataUrl2 = cropResult2?.[0]?.result;
+      console.log('[Background] Crop result 2:', cropResult2);
+      console.log('[Background] Cropped data URL 2 length:', croppedDataUrl2?.length);
+      if (!croppedDataUrl2 || !croppedDataUrl2.startsWith('data:')) {
+        throw new Error('Failed to crop image: invalid result');
+      }
+      finalDataUrl = croppedDataUrl2;
     }
 
+    console.log('[Background] Calling processCapturedImage with finalDataUrl length:', finalDataUrl?.length);
     await processCapturedImage(finalDataUrl, tabId);
+    
+    // Clear request and reset polling flag after successful completion
+    await CaptureQueue.clear();
+    pollingActive = false;
   } catch (error) {
     console.error('[Background] Area processing error:', error);
+    console.error('[Background] Error stack:', error.stack);
     await CaptureQueue.updateState({ status: 'error', error: error.message });
+    
+    // Clear request and reset polling flag on error
+    await CaptureQueue.clear();
+    pollingActive = false;
   }
 }
 
@@ -604,15 +674,10 @@ async function captureFullPageForArea(tab, areaSelection) {
 }
 
 // Process captured image and run AI analysis
-// Inject and show floating progress indicator
+// Show floating progress indicator
+// Note: progress-indicator.js is already loaded as content script, so we just send the message
 async function showFloatingProgress(tabId) {
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['progress-indicator.js']
-    });
-    // Give it time to initialize
-    await new Promise(resolve => setTimeout(resolve, 100));
     await chrome.tabs.sendMessage(tabId, { action: 'showProgress' });
   } catch (e) {
     console.log('[Background] Could not show progress indicator:', e.message);
@@ -621,6 +686,19 @@ async function showFloatingProgress(tabId) {
 
 // Hide floating progress indicator
 async function hideFloatingProgress(tabId) {
+  // Check current state - don't hide if still actively processing
+  // This prevents premature hiding when service worker wakes from suspension
+  // Exception: 'selecting' state allows hiding (area selection overlay is the UI)
+  try {
+    const state = await CaptureQueue.getState();
+    if (state && ['analyzing', 'processing', 'capturing'].includes(state.status)) {
+      console.log('[Background] Skipping hideFloatingProgress - still active:', state.status);
+      return;
+    }
+  } catch (e) {
+    // Ignore errors
+  }
+  
   try {
     await chrome.tabs.sendMessage(tabId, { action: 'hideProgress' });
   } catch (e) {
@@ -647,7 +725,7 @@ async function processCapturedImage(dataUrl, tabId) {
   try {
     await CaptureQueue.updateState({ status: 'analyzing' });
 
-    // Show floating progress indicator
+    // Show progress indicator when analysis starts (after capture is complete)
     await showFloatingProgress(tabId);
     await updateFloatingProgress(tabId, 0, 10, 'Analyzing', 'Initializing...');
 
@@ -656,12 +734,10 @@ async function processCapturedImage(dataUrl, tabId) {
 
     if (!base64Image) throw new Error('Invalid image data');
 
-    // Resize image if needed to prevent API 413 errors (max 1920px on longest side)
-    // Full-page captures can easily exceed size limits for some APIs
-    base64Image = await resizeImageIfNeeded(base64Image, 1920);
+    // Resize image if needed
+    base64Image = await resizeImageIfNeeded(dataUrl, 1920);
+    if (!base64Image) throw new Error('Failed to resize image');
 
-    // Use the new multimodal service which supports redirect mode
-    // The function is imported from ai-service-multimodal.js
     const result = await analyzeScreenshot(base64Image, settings, tabId, updateFloatingProgress);
 
     // Check if cancelled before updating state
@@ -678,16 +754,50 @@ async function processCapturedImage(dataUrl, tabId) {
     });
     await hideFloatingProgress(tabId);
 
-    // Only show result panel if NOT in redirect mode
-    // Redirect mode opens a new tab to the provider, so no result to display
-    if (!settings.useRedirectMode) {
-      await CaptureQueue.safeTabMessage(tabId, { action: 'showResult', result });
+    // Send message to tab to show result (for both popup and floating icon flows)
+    // The result-display component is loaded as a content script on all pages
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: 'showResult',
+        result: result
+      });
+    } catch (e) {
+      console.warn('[Background] Could not send showResult message to tab:', e.message);
     }
   } catch (error) {
     console.error('[Background] processCapturedImage error:', error);
-    console.error('[Background] Error stack:', error.stack);
-    await CaptureQueue.updateState({ status: 'error', error: error.message });
-    await hideFloatingProgress(tabId);
+
+    // Don't hide progress on transient errors (service worker suspension/reload)
+    // The polling loop in floating-icon.js will detect the error state
+    // Only hide if it's a real error (not connection/context issues)
+    const isTransientError = error.message && (
+      error.message.includes('Extension context') ||
+      error.message.includes('context invalidated') ||
+      error.message.includes('Service worker') ||
+      error.message.includes('Connection') ||
+      error.message.includes('Network')
+    );
+
+    if (!isTransientError) {
+      await CaptureQueue.updateState({ status: 'error', error: error.message });
+      await hideFloatingProgress(tabId);
+
+      // Send error message to tab to show error
+      try {
+        await chrome.tabs.sendMessage(tabId, {
+          action: 'showResult',
+          result: `<div style="padding: 20px; border-left: 4px solid #ef4444; background: #fef2f2; border-radius: 4px;">
+            <h2 style="color: #dc2626; margin-top: 0;">⚠️ Error</h2>
+            <p style="color: #7f1d1d; font-size: 14px;">${error.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
+          </div>`
+        });
+      } catch (e) {
+        console.warn('[Background] Could not send error message to tab:', e.message);
+      }
+    } else {
+      // For transient errors, just update state - let polling handle UI
+      await CaptureQueue.updateState({ status: 'error', error: 'Analysis interrupted. Please try again.' });
+    }
   }
 }
 
@@ -840,6 +950,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true; // Keep message channel open for async response
+  } else if (request.action === 'startAreaSelection') {
+    // Handle area selection request from popup
+    // This ensures the request is processed before popup closes
+    handleStartAreaSelection(request, sender)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true; // Keep message channel open for async response
   }
   return true;
 });
@@ -848,6 +965,53 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 async function handleCancelCapture() {
   await CaptureQueue.cancel();
   await CaptureQueue.reset();
+}
+
+// Handle start area selection (called from popup via message)
+async function handleStartAreaSelection(request, sender) {
+  let { tabId, url } = request;
+
+  // If tabId is null/missing, use sender.tab.id (for floating icon) or find the active tab
+  if (!tabId) {
+    // Prefer sender.tab.id if available (message sent from a tab)
+    if (sender.tab?.id) {
+      tabId = sender.tab.id;
+    } else {
+      // Fallback: find active tab (for messages from popup or other contexts)
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = activeTab?.id;
+    }
+  }
+  
+  if (!tabId) {
+    throw new Error('Could not determine the target tab');
+  }
+  
+  // If URL is not provided, get it from the tab
+  if (!url) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      url = tab.url;
+    } catch (e) {
+      throw new Error('Could not access tab');
+    }
+  }
+  
+  // Check restricted URL
+  if (isRestrictedUrl(url)) {
+    throw new Error('Cannot capture screenshots on this page (Restricted URL).');
+  }
+  
+  // Enqueue the area selection request
+  await CaptureQueue.enqueue({
+    mode: 'area',
+    url,
+    tabId
+  });
+  
+  // Process the request immediately
+  // This ensures the area selection starts before the popup closes
+  await processQueuedRequest();
 }
 
 // Handle follow-up question
@@ -901,5 +1065,10 @@ async function processFollowUpRequest() {
   }
 }
 
-// Clean up stale state on load
-chrome.storage.local.remove(['captureRequest', 'currentCapture', 'areaSelection', 'activeCaptureTabId', 'followUpRequest', 'followUpResponse']);
+// Clean up stale state on load — but NOT captureRequest, followUpRequest,
+// or followUpResponse, which may be the request that just woke this service
+// worker (MV3 race condition: fire-and-forget remove() can delete the
+// pending request before the storage listener processes it).
+chrome.storage.local.remove(['currentCapture', 'areaSelection', 'activeCaptureTabId']);
+// Also clear session storage processing lock to prevent stale locks blocking first click
+chrome.storage.session.remove('captureProcessingLock').catch(() => {});
